@@ -15,7 +15,7 @@ from pathlib import Path
 
 import CoreML
 import Vision
-from Foundation import NSURL
+from Foundation import NSURL, NSProcessInfo
 
 from private_io import open_private_file, write_json
 from secure_store import DB_PATH, STATE_DIR, connect, prepare_private_dir
@@ -25,6 +25,7 @@ SCREENSHOT_ROOTS = (STATE_DIR / "screenshots", STATE_DIR / "pensieve/screenshots
 STATUS_PATH = STATE_DIR / "screen-feature-latest-receipt.json"
 LOCK_PATH = STATE_DIR / "screen-feature-index.lock"
 REVISION = 2
+LEGACY_CPU_FLAG = NSProcessInfo.processInfo().operatingSystemVersion()[0] == 14
 
 
 def private_screenshot(path: Path) -> bool:
@@ -40,16 +41,20 @@ def featureprint(path: Path) -> tuple[bytes, int]:
     request = Vision.VNGenerateImageFeaturePrintRequest.alloc().init()
     request.setRevision_(REVISION)
     # These small background fingerprints do not need the GPU/Neural Engine.
-    # Explicit CPU stages also work on virtual Macs without those devices.
-    devices, device_error = request.supportedComputeStageDevicesAndReturnError_(None)
-    if device_error or not devices:
-        raise ValueError("Local Vision CPU devices unavailable")
-    for stage, options in devices.items():
-        cpu = next((item for item in options
-                    if item.isKindOfClass_(CoreML.MLCPUComputeDevice)), None)
-        if cpu is None:
-            raise ValueError("Local Vision CPU device unavailable")
-        request.setComputeDevice_forComputeStage_(cpu, stage)
+    # The macOS 14 virtual runner needs the older CPU-only flag to initialize
+    # Vision; selecting a CPU stage alone still returned internal error 9.
+    if LEGACY_CPU_FLAG:
+        request.setUsesCPUOnly_(True)
+    else:
+        devices, device_error = request.supportedComputeStageDevicesAndReturnError_(None)
+        if device_error or not devices:
+            raise ValueError("Local Vision CPU devices unavailable")
+        for stage, options in devices.items():
+            cpu = next((item for item in options
+                        if item.isKindOfClass_(CoreML.MLCPUComputeDevice)), None)
+            if cpu is None:
+                raise ValueError("Local Vision CPU device unavailable")
+            request.setComputeDevice_forComputeStage_(cpu, stage)
     handler = Vision.VNImageRequestHandler.alloc().initWithURL_options_(
         NSURL.fileURLWithPath_(str(path)), {})
     success, error = handler.performRequests_error_([request], None)

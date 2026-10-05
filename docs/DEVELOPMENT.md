@@ -23,10 +23,11 @@ modules and rejects Python file/SQLite access to the user's real `Library`.
 Database and image fixtures remain synthetic even when running tests on an
 installed Mac. This guard prevents accidental access; it is not an OS sandbox
 for arbitrary native calls or subprocesses.
-The synthetic feature-print integration runs Apple's real Vision framework
-with explicit CPU compute stages, so it also works without a GPU on virtual
-Macs when their Vision backend is available. It checks repeatability, stored
-vector format, and a changed-image distance.
+The synthetic feature-print integration runs Apple's real Vision framework on
+the CPU. macOS 14 uses the older CPU-only request flag; newer systems select
+supported CPU compute stages. A cold hosted macOS 14 run required the older
+flag to initialize Vision. The integration checks repeatability, stored vector
+format, and a changed-image distance; it remains required in hosted CI.
 
 For a focused change:
 
