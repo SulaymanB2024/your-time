@@ -2,7 +2,7 @@
 
 ## Supported environment
 
-macOS on Apple Silicon, Python 3.11, Node.js and the macOS `zsh` and
+macOS 14 or later on Apple Silicon, Python 3.11, Node.js and the macOS `zsh` and
 `sandbox-exec` utilities. The dependency lock pins the Python environment.
 This repository represents an installed configuration, not a portable installer.
 Do not run collection wrappers on a different account without reviewing paths,
@@ -23,6 +23,9 @@ modules and rejects Python file/SQLite access to the user's real `Library`.
 Database and image fixtures remain synthetic even when running tests on an
 installed Mac. This guard prevents accidental access; it is not an OS sandbox
 for arbitrary native calls or subprocesses.
+The synthetic feature-print integration runs Apple's real Vision framework
+with explicit CPU compute stages, so it also works without a GPU on virtual
+Macs. It checks repeatability, stored vector format, and a changed-image distance.
 
 For a focused change:
 

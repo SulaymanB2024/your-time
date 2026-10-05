@@ -13,6 +13,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import CoreML
 import Vision
 from Foundation import NSURL
 
@@ -38,6 +39,17 @@ def private_screenshot(path: Path) -> bool:
 def featureprint(path: Path) -> tuple[bytes, int]:
     request = Vision.VNGenerateImageFeaturePrintRequest.alloc().init()
     request.setRevision_(REVISION)
+    # These small background fingerprints do not need the GPU/Neural Engine.
+    # Explicit CPU stages also work on virtual Macs without those devices.
+    devices, device_error = request.supportedComputeStageDevicesAndReturnError_(None)
+    if device_error or not devices:
+        raise ValueError("Local Vision CPU devices unavailable")
+    for stage, options in devices.items():
+        cpu = next((item for item in options
+                    if item.isKindOfClass_(CoreML.MLCPUComputeDevice)), None)
+        if cpu is None:
+            raise ValueError("Local Vision CPU device unavailable")
+        request.setComputeDevice_forComputeStage_(cpu, stage)
     handler = Vision.VNImageRequestHandler.alloc().initWithURL_options_(
         NSURL.fileURLWithPath_(str(path)), {})
     success, error = handler.performRequests_error_([request], None)

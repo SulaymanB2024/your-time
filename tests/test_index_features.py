@@ -21,7 +21,8 @@ def test_private_feature_print_index_and_distance(tmp_path, monkeypatch):
     image.save(path)
     # Surface a safe framework code instead of hiding the integration failure
     # behind the worker's aggregate failure count.
-    index_features.featureprint(path)
+    original, count = index_features.featureprint(path)
+    assert count == 768
     now = datetime.now(timezone.utc).isoformat()
     with secure_store.connect() as database:
         database.execute(
@@ -36,6 +37,13 @@ def test_private_feature_print_index_and_distance(tmp_path, monkeypatch):
     assert revision == index_features.REVISION
     assert len(vector) == 3072
     assert index_features.distance(vector, vector) == 0
+    assert index_features.distance(original, vector) < 1e-6
+    changed = tmp_path / "changed.webp"
+    different = Image.new("RGB", (128, 128), "black")
+    ImageDraw.Draw(different).ellipse((5, 5, 110, 110), fill="white")
+    different.save(changed)
+    changed_vector, _ = index_features.featureprint(changed)
+    assert index_features.distance(vector, changed_vector) > 0.01
     index_features.write_receipt(result)
     receipt = tmp_path / "feature-receipt.json"
     assert receipt.stat().st_mode & 0o777 == 0o600
