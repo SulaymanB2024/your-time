@@ -17,6 +17,7 @@ import shutil
 import sqlite3
 import subprocess
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -83,8 +84,26 @@ def receipt_summary(path: Path, now: datetime, max_age: float) -> dict:
     return result
 
 
+def job_definition(source: Path) -> dict | None:
+    try:
+        expected = plistlib.loads(source.read_bytes())
+        if (not isinstance(expected, dict) or
+                not isinstance(expected.get('Label'), str) or
+                not re.fullmatch(r'[A-Za-z0-9._-]{1,120}', expected['Label']) or
+                not isinstance(expected.get('ProgramArguments'), list) or
+                not expected['ProgramArguments'] or
+                not all(isinstance(arg, str) and arg for arg in expected['ProgramArguments'])):
+            return None
+        return expected
+    except (OSError, ValueError):
+        return None
+
+
 def inspect_job(source: Path, installed: Path) -> dict:
-    expected = plistlib.loads(source.read_bytes())
+    expected = job_definition(source)
+    if expected is None:
+        return {'source_invalid': True, 'loaded': False, 'installed': installed.is_file(),
+                'matches_source': False, 'private': private_path(installed)}
     label = expected['Label']
     output = command(['/bin/launchctl', 'print', f'gui/{os.getuid()}/{label}'])
     result = {'loaded': output.returncode == 0, 'installed': installed.is_file(),
@@ -108,7 +127,11 @@ def inspect_job(source: Path, installed: Path) -> dict:
 def model_files(state: Path, project: Path, hash_models: bool) -> dict:
     try:
         manifest = json.loads((project / 'vision_quality_model_manifest.json').read_text())
-        if {item['name'] for item in manifest['files']} != {'Qwen3.5-9B-Q8_0.gguf', 'mmproj-F16.gguf'}:
+        if (len(manifest['files']) != 2 or
+                {item['name'] for item in manifest['files']} != {'Qwen3.5-9B-Q8_0.gguf', 'mmproj-F16.gguf'} or
+                any(type(item['size']) is not int or item['size'] <= 0 or
+                    not isinstance(item['sha256'], str) or not re.fullmatch(r'[0-9a-f]{64}', item['sha256'])
+                    for item in manifest['files'])):
             raise ValueError('Unexpected active model files')
     except (OSError, ValueError, TypeError, KeyError):
         return {'active_model': 'Qwen3.5-9B-Q8_0', 'hashes_checked': False, 'files': [],
@@ -166,14 +189,49 @@ def database_health(state: Path) -> dict:
 
 
 def dashboard_health(state: Path) -> bool:
+    # The builder replaces HTML before its manifest. A read spanning that
+    # short publication interval must not report permanent corruption.
+    for attempt in range(3):
+        try:
+            manifest = json.loads((state / 'dashboard/manifest.json').read_text())
+            payload = (state / 'dashboard/index.html').read_bytes()
+            if (len(payload) == manifest['bytes'] and
+                    hashlib.sha256(payload).hexdigest() == manifest['sha256'] and
+                    private_path(state / 'dashboard/index.html')):
+                return True
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+        if attempt < 2:
+            time.sleep(.02)
+    return False
+
+
+def vision_attempt_summary(path: Path) -> dict:
+    result = {'exists': path.is_file(), 'valid': False}
+    if not result['exists']:
+        return result
     try:
-        manifest = json.loads((state / 'dashboard/manifest.json').read_text())
-        payload = (state / 'dashboard/index.html').read_bytes()
-        return (len(payload) == manifest['bytes'] and
-                hashlib.sha256(payload).hexdigest() == manifest['sha256'] and
-                private_path(state / 'dashboard/index.html'))
-    except (OSError, ValueError, KeyError, TypeError):
-        return False
+        value = json.loads(path.read_text())
+        if not isinstance(value, dict):
+            return result
+        for field in ('started_at_utc', 'finished_at_utc'):
+            stamp = value.get(field)
+            if stamp is not None:
+                if not isinstance(stamp, str) or datetime.fromisoformat(stamp).tzinfo is None:
+                    return result
+            result[field] = stamp
+        for field in ('selected', 'completed', 'failed'):
+            count = value.get(field)
+            if count is not None and (type(count) is not int or count < 0):
+                return {'exists': True, 'valid': False}
+            result[field] = count
+        stop = value.get('stop_reason')
+        if stop is not None and (not isinstance(stop, str) or not SAFE_CODE.fullmatch(stop)):
+            return {'exists': True, 'valid': False}
+        result.update(stop_reason=stop, valid=True)
+    except (OSError, ValueError, TypeError):
+        return {'exists': True, 'valid': False}
+    return result
 
 
 def inspect(*, hash_models: bool = False) -> dict:
@@ -181,7 +239,11 @@ def inspect(*, hash_models: bool = False) -> dict:
     failures, warnings = [], []
     jobs = {}
     for source in sorted((PROJECT / 'launchagents').glob('*.plist')):
-        label = plistlib.loads(source.read_bytes())['Label']
+        definition = job_definition(source)
+        if definition is None:
+            failures.append('job_source_invalid:' + source.name)
+            continue
+        label = definition['Label']
         installed = Path.home() / 'Library/LaunchAgents' / source.name
         if label in OPTIONAL_JOBS and not installed.is_file():
             jobs[label] = {'optional': True, 'installed': False, 'loaded': False}
@@ -212,6 +274,11 @@ def inspect(*, hash_models: bool = False) -> dict:
         warnings.append('phone_import_failed')
     if receipts['project-git-latest-receipt.json'].get('fields', {}).get('status') == 'partial':
         warnings.append('git_metadata_partial')
+    watcher = receipts['project-file-latest-receipt.json'].get('fields', {})
+    if watcher.get('status') not in ('watching',):
+        warnings.append('file_metadata_write_paused_or_retrying')
+    if watcher.get('dropped', 0):
+        warnings.append('file_metadata_queue_overflow')
     database = database_health(STATE)
     if not database['private'] or not database['quick_check_ok']:
         failures.append('database_integrity_or_permissions')
@@ -250,7 +317,9 @@ def inspect(*, hash_models: bool = False) -> dict:
     if memory_percent is None or memory_percent < 20: gates.append('low_memory')
     if resources['load_1m'] > 2 * (resources['logical_cpus'] or 1): gates.append('system_load_high')
     latest = STATE / 'vision-fallback-latest-receipt.json'
-    vision = json.loads(latest.read_text()) if latest.is_file() else {}
+    vision = vision_attempt_summary(latest)
+    if vision['exists'] and not vision['valid']:
+        warnings.append('vision_latest_receipt_invalid')
     return {'schema_version': 1, 'checked_at_utc': now.isoformat(),
             'status': 'needs_repair' if failures else 'ready_with_gates_or_warnings' if gates or warnings else 'ready',
             'failures': failures, 'warnings': warnings, 'jobs': jobs, 'receipts': receipts,
@@ -260,9 +329,7 @@ def inspect(*, hash_models: bool = False) -> dict:
             'overnight': {'start': START.isoformat(timespec='minutes'),
                           'vision_end': VISION_END.isoformat(timespec='minutes'),
                           'end': END.isoformat(timespec='minutes'), 'current_resource_gates': gates,
-                          'latest_9b_attempt': {k: vision.get(k) for k in
-                                               ('started_at_utc', 'finished_at_utc', 'selected',
-                                                'completed', 'failed', 'stop_reason')}},
+                          'latest_9b_attempt': vision},
             'scope': 'Read-only installed configuration, integrity and aggregate receipts. Loaded schedules are not successful runs. No activity bodies or screenshots.'}
 
 

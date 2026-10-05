@@ -6,6 +6,16 @@ feed an offline dashboard with day, week, month and year views. On-device 9B
 models add contextual tags and summaries. Observations, model suggestions and
 confirmed outcomes remain separate.
 
+File-change batches stay queued until their SQLite transaction commits, and
+transient write errors are retried. Empty flushes do not open the database.
+The queue is bounded; abrupt process termination can still lose uncommitted
+metadata. Setup checks distinguish a running watcher from paused writes.
+
+Git scans filter the configured user's authored or committed changes before
+applying the 500-commit per-store bound. Unreadable ref tips are counted while
+valid history remains readable. Truncated histories and unreadable tips make
+the scan explicitly partial; they are not a claim of complete project history.
+
 This is the installed configuration for one Apple Silicon Mac. It runs locally,
 without a web server, cloud inference, automatic uploads or paid services.
 The private source repository contains no recorded activity or model weights.

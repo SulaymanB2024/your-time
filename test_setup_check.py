@@ -3,6 +3,7 @@ import json
 import os
 import plistlib
 import subprocess
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 import setup_check
@@ -71,3 +72,58 @@ def test_receipt_write_is_private_and_atomic(tmp_path):
     assert path.stat().st_mode & 0o777 == 0o600
     assert json.loads(path.read_text()) == {'status': 'ready'}
     assert {p.name for p in tmp_path.iterdir()} == {'setup.json'}
+
+
+def test_malformed_job_is_reported_without_exposing_its_body(tmp_path):
+    source = tmp_path/'source.plist'
+    source.write_text('PRIVATE INVALID PLIST')
+    result = setup_check.inspect_job(source, tmp_path/'installed.plist')
+    assert result['source_invalid'] and not result['loaded']
+    assert 'PRIVATE' not in json.dumps(result)
+    source.write_bytes(plistlib.dumps({'Label': 'example', 'ProgramArguments': '/wrong/type'}))
+    assert setup_check.job_definition(source) is None
+
+
+def test_dashboard_checks_retry_publication_race_but_reject_corruption(tmp_path, monkeypatch):
+    folder = tmp_path/'dashboard'
+    folder.mkdir()
+    page = folder/'index.html'
+    page.write_bytes(b'new page')
+    page.chmod(0o600)
+    (folder/'manifest.json').write_text(json.dumps({'bytes': 8, 'sha256': hashlib.sha256(b'new page').hexdigest()}))
+    real_read = Path.read_bytes
+    reads = 0
+    def race(path):
+        nonlocal reads
+        if path == page:
+            reads += 1
+            if reads == 1: return b'previous page'
+        return real_read(path)
+    monkeypatch.setattr(Path, 'read_bytes', race)
+    assert setup_check.dashboard_health(tmp_path) and reads == 2
+    page.write_bytes(b'corrupt')
+    assert not setup_check.dashboard_health(tmp_path)
+
+
+def test_invalid_vision_receipt_does_not_crash_or_expose_activity(tmp_path):
+    path = tmp_path/'vision.json'
+    for body in ('INVALID PRIVATE BODY', '[]', json.dumps({'completed': -1, 'description': 'PRIVATE CAPTION'}),
+                 json.dumps({'stop_reason': 'PRIVATE ERROR DETAILS'})):
+        path.write_text(body)
+        result = setup_check.vision_attempt_summary(path)
+        assert result == {'exists': True, 'valid': False}
+    path.write_text(json.dumps({'completed': 2, 'stop_reason': 'battery_power', 'description': 'PRIVATE CAPTION'}))
+    result = setup_check.vision_attempt_summary(path)
+    assert result['valid'] and result['completed'] == 2
+    assert 'PRIVATE' not in json.dumps(result)
+
+
+def test_duplicate_model_files_and_invalid_hashes_fail_closed(tmp_path):
+    manifest = tmp_path/'vision_quality_model_manifest.json'
+    files = [{'name': name, 'size': 7, 'sha256': '0'*64}
+             for name in ('Qwen3.5-9B-Q8_0.gguf', 'mmproj-F16.gguf')]
+    manifest.write_text(json.dumps({'files': files + [files[0]]}))
+    assert setup_check.model_files(tmp_path, tmp_path, False)['manifest_invalid']
+    files[0]['sha256'] = 'invalid'
+    manifest.write_text(json.dumps({'files': files}))
+    assert setup_check.model_files(tmp_path, tmp_path, False)['manifest_invalid']

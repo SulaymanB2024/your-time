@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import signal
+import sqlite3
 import tempfile
 import threading
 import time
@@ -50,7 +51,10 @@ def allowed_file(path_text: str) -> tuple[str, str] | None:
         return None
     if not is_work_path(relative):
         return None
-    if path.is_symlink() or path.name.endswith((".tmp", ".swp", "~")):
+    try:
+        if path.is_symlink() or not path.resolve().is_relative_to(ROOT.resolve()):
+            return None
+    except (OSError, RuntimeError):
         return None
     project = project_for(relative)
     return (project, str(relative)) if project else None
@@ -88,13 +92,18 @@ class QueuedEvents(FileSystemEventHandler):
             self.queue.append((datetime.now(timezone.utc).isoformat(), scoped[0],
                                scoped[1], event.event_type))
 
-    def drain(self) -> tuple[list[tuple], int]:
+    def pending(self) -> tuple[list[tuple], int]:
         with self.lock:
-            rows = list(self.queue)
-            self.queue.clear()
-            dropped = self.dropped
-            self.dropped = 0
-        return rows, dropped
+            return list(self.queue), self.dropped
+
+    def acknowledge(self, rows: list[tuple], dropped: int) -> None:
+        # A callback can append while SQLite is writing. Remove only the
+        # snapshot that actually committed; keep newer events and loss counts.
+        committed = {id(row) for row in rows}
+        with self.lock:
+            while self.queue and id(self.queue[0]) in committed:
+                self.queue.popleft()
+            self.dropped -= dropped
 
 
 def write_receipt(value: dict) -> None:
@@ -103,7 +112,7 @@ def write_receipt(value: dict) -> None:
     try:
         os.fchmod(fd, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as output:
-            json.dump({"checked_at_utc": datetime.now(timezone.utc).isoformat(), **value},
+            json.dump({"schema_version": 2, "checked_at_utc": datetime.now(timezone.utc).isoformat(), **value},
                       output, sort_keys=True)
             output.write("\n")
             output.flush()
@@ -119,17 +128,29 @@ def flush(handler: QueuedEvents) -> dict:
             queued, dropped = len(handler.queue), handler.dropped
         return {"status": "paused_low_disk", "inserted": 0,
                 "not_written": queued, "dropped": dropped}
-    rows, dropped = handler.drain()
+    rows, dropped = handler.pending()
     inserted = 0
-    with connect() as database:
-        for timestamp, project, relative, kind in rows:
-            bucket = int(datetime.fromisoformat(timestamp).timestamp()) // COALESCE_SECONDS
-            event_id = hashlib.sha256(json.dumps([bucket, relative, kind]).encode()).hexdigest()
-            cursor = database.execute(
-                "INSERT OR IGNORE INTO project_file_events VALUES (?, ?, ?, ?, ?)",
-                (event_id, timestamp, project, relative, kind))
-            inserted += cursor.rowcount
-    return {"status": "watching", "inserted": inserted, "not_written": 0,
+    try:
+        if rows:
+            with connect() as database:
+                for timestamp, project, relative, kind in rows:
+                    bucket = int(datetime.fromisoformat(timestamp).timestamp()) // COALESCE_SECONDS
+                    event_id = hashlib.sha256(json.dumps([bucket, relative, kind]).encode()).hexdigest()
+                    cursor = database.execute(
+                        "INSERT OR IGNORE INTO project_file_events VALUES (?, ?, ?, ?, ?)",
+                        (event_id, timestamp, project, relative, kind))
+                    inserted += cursor.rowcount
+    except (sqlite3.Error, OSError):
+        # The transaction rolls back. Never expose exception text or discard
+        # the pending batch; retry on the next flush without killing the watcher.
+        with handler.lock:
+            queued, current_dropped = len(handler.queue), handler.dropped
+        return {"status": "retry_database", "inserted": 0,
+                "not_written": queued, "dropped": current_dropped}
+    handler.acknowledge(rows, dropped)
+    with handler.lock:
+        pending = len(handler.queue)
+    return {"status": "watching", "inserted": inserted, "not_written": pending,
             "dropped": dropped, "last_event_utc": rows[-1][0] if rows else None,
             "coalesced_since_start": handler.coalesced,
             "ignored_generated_since_start": handler.ignored,
@@ -166,7 +187,9 @@ def main() -> None:
         finally:
             observer.stop()
             observer.join(timeout=10)
-            write_receipt({"root_count": 2, **flush(handler), "status": "stopped"})
+            result = flush(handler)
+            write_receipt({"root_count": 2, **result,
+                           "status": "stopped_with_pending" if result["not_written"] else "stopped"})
     finally:
         os.close(fd)
 

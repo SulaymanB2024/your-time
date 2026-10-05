@@ -7,6 +7,8 @@ import fcntl
 import hashlib
 import json
 import os
+import re
+import sqlite3
 import subprocess
 import tempfile
 import time
@@ -24,6 +26,15 @@ LOCK_PATH = STATE_DIR / "project-git-scan.lock"
 SKIP_DIRS = frozenset({".git", "node_modules", ".venv", "venv", "dist", "build", ".next",
                        ".cache", "vendor", "coverage", "__pycache__", "data"})
 MAX_DEPTH = 4
+
+
+def git_read(path: str, *args: str, input_text: str | None = None, timeout: int = 30):
+    return subprocess.run(["/usr/bin/git", "-C", path, "--no-pager", *args],
+                          input=input_text, capture_output=True, text=True, timeout=timeout,
+                          check=False, env={"HOME": str(Path.home()),
+                                            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+                                            "GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0",
+                                            "GIT_NO_LAZY_FETCH": "1"})
 
 
 def discover_repositories(root: Path = SCAN_ROOT) -> list[Path]:
@@ -55,44 +66,61 @@ def resolve_repo(path: Path) -> tuple[str, str] | None:
 
 def local_git_emails(path: str) -> set[str]:
     emails = set()
-    for args in (["/usr/bin/git", "-C", path, "config", "--get", "user.email"],
-                 ["/usr/bin/git", "config", "--global", "--get", "user.email"]):
-        result = subprocess.run(args, capture_output=True, text=True, timeout=5, check=False)
+    for scope in ((), ('--global',)):
+        result = git_read(path, 'config', *scope, '--get', 'user.email', timeout=5)
         if result.returncode == 0 and "@" in result.stdout:
             emails.add(result.stdout.strip().casefold())
     return emails
 
 
-def git_commits(path: str, since_days: int, limit: int = 500) -> list[tuple[str, str]]:
+def git_commits(path: str, since_days: int, limit: int = 500, *, diagnostics: dict | None = None) -> list[tuple[str, str]]:
+    if limit < 1:
+        raise ValueError("limit must be positive")
+    diagnostics = diagnostics if diagnostics is not None else {}
+    diagnostics.update(unreadable_ref_tips=0, history_truncated=False)
     emails = local_git_emails(path)
     if not emails:
         return []
-    args = ["/usr/bin/git", "-C", path, "--no-pager", "log", "--all",
-            f"--since={since_days} days ago", f"-n{limit}",
-            "--format=%H%x09%cI%x09%ae%x09%ce"]
-    result = subprocess.run(args, capture_output=True, text=True, timeout=30,
-                            check=False, env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
-                                              "GIT_TERMINAL_PROMPT": "0",
-                                              "GIT_OPTIONAL_LOCKS": "0"})
-    if result.returncode:
-        head = subprocess.run(["/usr/bin/git", "-C", path, "rev-parse", "--verify", "HEAD"],
-                              capture_output=True, timeout=5, check=False)
-        if head.returncode:
-            return []
+    refs = git_read(path, 'for-each-ref', '--format=%(objectname)')
+    if refs.returncode:
         raise RuntimeError("git_log_failed")
-    rows = []
-    for line in result.stdout.splitlines():
-        parts = line.split("\t")
-        if len(parts) != 4 or len(parts[0]) not in {40, 64}:
-            continue
-        if not (parts[2].casefold() in emails or parts[3].casefold() in emails):
-            continue
-        try:
-            committed = datetime.fromisoformat(parts[1]).astimezone(timezone.utc).isoformat()
-        except ValueError:
-            continue
-        rows.append((parts[0], committed))
-    return rows
+    tips = sorted({line for line in refs.stdout.splitlines()
+                   if re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', line)})
+    if tips:
+        objects = git_read(path, 'cat-file', '--batch-check=%(objectname) %(objecttype)',
+                           input_text='\n'.join(tips) + '\n')
+        if objects.returncode:
+            raise RuntimeError("git_log_failed")
+        diagnostics['unreadable_ref_tips'] = sum(line.endswith(' missing')
+                                               for line in objects.stdout.splitlines())
+    # Filter before bounding the history. Busy collaborators must not crowd
+    # out the owner's commits. Separate queries express author OR committer.
+    pattern = '<(' + '|'.join(re.escape(email) for email in sorted(emails)) + ')>'
+    rows = {}
+    for field in ('author', 'committer'):
+        result = git_read(path, 'log', '--ignore-missing', '--all', '--no-show-signature',
+                          '--no-color', '--extended-regexp', '--regexp-ignore-case',
+                          f'--{field}={pattern}', f'--since={since_days} days ago',
+                          f'-n{limit + 1}', '--format=%H%x09%cI%x09%ae%x09%ce')
+        if result.returncode:
+            head = git_read(path, 'rev-parse', '--verify', 'HEAD', timeout=5)
+            if head.returncode:
+                return []
+            raise RuntimeError("git_log_failed")
+        for line in result.stdout.splitlines():
+            parts = line.split("\t")
+            if len(parts) != 4 or not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', parts[0]):
+                continue
+            if not (parts[2].casefold() in emails or parts[3].casefold() in emails):
+                continue
+            try:
+                committed = datetime.fromisoformat(parts[1]).astimezone(timezone.utc).isoformat()
+            except ValueError:
+                continue
+            rows[parts[0]] = committed
+    ordered = sorted(rows.items(), key=lambda row: (row[1], row[0]), reverse=True)
+    diagnostics['history_truncated'] = len(ordered) > limit
+    return ordered[:limit]
 
 
 def write_receipt(value: dict) -> None:
@@ -114,6 +142,8 @@ def write_receipt(value: dict) -> None:
 def run(*, since_days: int = 365, limit_repos: int | None = None) -> dict:
     if not 1 <= since_days <= 3650:
         raise ValueError("since_days must be 1-3650")
+    if limit_repos is not None and limit_repos < 1:
+        raise ValueError("limit_repos must be positive")
     candidates = discover_repositories()
     if limit_repos is not None:
         candidates = candidates[:limit_repos]
@@ -121,6 +151,7 @@ def run(*, since_days: int = 365, limit_repos: int | None = None) -> dict:
     resolved = scanned = inserted = errors = 0
     error_counts = Counter()
     seen_common = set()
+    unreadable_refs = truncated_stores = 0
     for candidate in candidates:
         try:
             identity = resolve_repo(candidate)
@@ -133,7 +164,10 @@ def run(*, since_days: int = 365, limit_repos: int | None = None) -> dict:
             if common_key in seen_common:
                 continue
             seen_common.add(common_key)
-            commits = git_commits(repo_path, since_days)
+            diagnostics = {}
+            commits = git_commits(repo_path, since_days, diagnostics=diagnostics)
+            unreadable_refs += diagnostics['unreadable_ref_tips']
+            truncated_stores += int(diagnostics['history_truncated'])
             scanned += 1
             now = datetime.now(timezone.utc).isoformat()
             with connect() as database:
@@ -150,14 +184,19 @@ def run(*, since_days: int = 365, limit_repos: int | None = None) -> dict:
         except RuntimeError:
             errors += 1
             error_counts["git_log_failed"] += 1
+        except sqlite3.Error:
+            errors += 1
+            error_counts["database_write_failed"] += 1
         except (OSError, subprocess.SubprocessError, ValueError):
             errors += 1
             error_counts["other"] += 1
-    result = {"status": "complete" if not errors else "partial",
+    result = {"status": "partial" if errors or unreadable_refs or truncated_stores else "complete",
               "candidate_repositories": len(candidates), "resolved": resolved,
               "git_stores_scanned": scanned, "new_commit_receipts": inserted,
               "errors": errors, "elapsed_seconds": round(time.monotonic() - started, 2),
               "error_counts": dict(error_counts),
+              "unreadable_ref_tips": unreadable_refs,
+              "history_truncated_stores": truncated_stores,
               "since_days": since_days,
               "interpretation": "Local commits are artifacts, not proof of deployment or acceptance."}
     write_receipt(result)
