@@ -17,12 +17,20 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from daily_analysis import ANALYSIS_DIR, ZONE, analyze, private_write
-from local_synthesis import (LOCK, MODEL_MANIFEST, model_call, read_json_file,
-                             safe_input_text, validate_text, verify_model, vision_busy)
-from secure_store import DB_PATH, STATE_DIR
+from local_synthesis import (
+    LOCK,
+    MODEL_MANIFEST,
+    model_call,
+    read_json_file,
+    safe_input_text,
+    validate_text,
+    verify_model,
+    vision_busy,
+)
 from model_execution import ModelBusy
+from private_io import open_private_file, prepare_directory
+from secure_store import DB_PATH, STATE_DIR
 from vision_batch import SENSITIVE_RE, resource_gate
-
 
 VERSION = "window_topics_v3"
 MIN_SECONDS = 30
@@ -252,8 +260,8 @@ def main() -> None:
     if args.allow_battery and len(ages) != 1:
         parser.error("--allow-battery requires one --days-ago")
     os.umask(0o077)
-    STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-    fd = os.open(LOCK, os.O_RDWR | os.O_CREAT, 0o600)
+    prepare_directory(STATE_DIR)
+    fd = open_private_file(LOCK)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:

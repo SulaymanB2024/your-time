@@ -84,6 +84,28 @@ The prior databases and screenshots were preserved. All current
 source directories and files were tightened to user-only permissions. Stock
 web services must not be restarted for routine review.
 
+## Private file handling
+
+`private_io.py` centralizes private directory traversal, file writes and lock
+descriptors. Directory components and file opens reject symbolic links; file
+targets must be owned regular files without additional hard links. Atomic
+writes use a random exclusively created temporary file, flush it, and replace
+the destination relative to an open directory descriptor. Failed writes retain
+the previous complete output and remove the temporary file. Private permissions
+are 0700 for directories and 0600 for newly created files.
+
+The store creates the private database before SQLite opens it and validates
+existing WAL, SHM and journal sidecars. Connections no longer change a
+process-wide umask, and failed transactions roll back. These checks protect
+against accidental path redirection and unsafe pre-existing filesystem entries;
+they do not protect a user account that a hostile same-user process controls.
+
+The Python source and the separately packaged, signed readers have different
+release lifecycles. Changing a source helper does not upgrade the installed
+reader bundle. Keep those bundles pinned until a separate build, signing and
+privacy-permission readback is authorized. Signature validity alone does not
+establish that an arbitrary newly signed bundle is the previously reviewed code.
+
 ## Source publication boundary
 
 The public GitHub repository receives only an intentional source export.
@@ -93,6 +115,28 @@ has no ancestry from the local historical working branch; subsequent exports
 have only published source parents. Default pushing is disabled on the working
 checkout. See [GITHUB.md](GITHUB.md). Ignore rules and pattern checks are a
 publication guard, not encryption or a substitute for source review.
+
+Root modules are explicitly registered; arbitrary new Python or TOML files are
+excluded. Tests and the three public engineering guides have bounded publication
+locations. The exporter checks common GitHub/OpenAI, AWS, Google, GitLab,
+Hugging Face, Slack and private-key patterns and rejects symlinks, non-file
+objects and embedded images. It still cannot classify all private prose or
+every credential format; a deliberate source review remains required.
+
+## Verification
+
+`make check` runs source syntax checks, Ruff and synthetic regression tests.
+The filesystem tests attempt symlink/hard-link redirection, linked parents,
+unsafe locks and database sidecars, interrupted writes, concurrent atomic
+replacement, private SQLite sidecars and transaction rollback. `make setup`
+checks the installed Mac separately, including network denial and signatures.
+`make audit` queries package/version advisory metadata without activity data.
+
+The October 2026 review upgraded the development-only pytest dependency from
+8.4.2 to 9.0.3 for its temporary-directory handling advisory:
+[pytest's patched release](https://github.com/pytest-dev/pytest/releases/tag/9.0.3).
+An advisory scan is limited to the inspected environment and currently
+published advisories; separately packaged reader dependencies are outside it.
 
 ## Remaining limits
 

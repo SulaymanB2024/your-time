@@ -9,7 +9,6 @@ import os
 import shutil
 import signal
 import sqlite3
-import tempfile
 import threading
 import time
 from collections import deque
@@ -19,6 +18,7 @@ from pathlib import Path
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers.fsevents import FSEventsObserver
 
+from private_io import open_private_file, write_json
 from project_activity import SCAN_ROOT
 from project_paths import is_work_path
 from secure_store import STATE_DIR, connect, prepare_private_dir
@@ -107,19 +107,7 @@ class QueuedEvents(FileSystemEventHandler):
 
 
 def write_receipt(value: dict) -> None:
-    prepare_private_dir()
-    fd, temporary = tempfile.mkstemp(prefix=".file-watch-receipt-", dir=STATE_DIR)
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as output:
-            json.dump({"schema_version": 2, "checked_at_utc": datetime.now(timezone.utc).isoformat(), **value},
-                      output, sort_keys=True)
-            output.write("\n")
-            output.flush()
-            os.fsync(output.fileno())
-        os.replace(temporary, STATUS_PATH)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+    write_json(STATUS_PATH, {"schema_version": 2, "checked_at_utc": datetime.now(timezone.utc).isoformat(), **value})
 
 
 def flush(handler: QueuedEvents) -> dict:
@@ -160,7 +148,7 @@ def flush(handler: QueuedEvents) -> dict:
 def main() -> None:
     os.umask(0o077)
     prepare_private_dir()
-    fd = os.open(LOCK_PATH, os.O_RDWR | os.O_CREAT, 0o600)
+    fd = open_private_file(LOCK_PATH)
     try:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)

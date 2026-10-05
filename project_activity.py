@@ -10,12 +10,12 @@ import os
 import re
 import sqlite3
 import subprocess
-import tempfile
 import time
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
+from private_io import open_private_file, write_json
 from secure_store import STATE_DIR, connect, prepare_private_dir
 
 APPROVED_ROOTS = (Path.home() / "Projects", Path.home() / "Projects/CodexWork")
@@ -124,19 +124,7 @@ def git_commits(path: str, since_days: int, limit: int = 500, *, diagnostics: di
 
 
 def write_receipt(value: dict) -> None:
-    prepare_private_dir()
-    fd, temporary = tempfile.mkstemp(prefix=".git-receipt-", dir=STATE_DIR)
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as output:
-            json.dump({"checked_at_utc": datetime.now(timezone.utc).isoformat(), **value},
-                      output, sort_keys=True)
-            output.write("\n")
-            output.flush()
-            os.fsync(output.fileno())
-        os.replace(temporary, STATUS_PATH)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+    write_json(STATUS_PATH, {"checked_at_utc": datetime.now(timezone.utc).isoformat(), **value})
 
 
 def run(*, since_days: int = 365, limit_repos: int | None = None) -> dict:
@@ -210,7 +198,7 @@ def main() -> None:
     args = parser.parse_args()
     os.umask(0o077)
     prepare_private_dir()
-    fd = os.open(LOCK_PATH, os.O_RDWR | os.O_CREAT, 0o600)
+    fd = open_private_file(LOCK_PATH)
     try:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)

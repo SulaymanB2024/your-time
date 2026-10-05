@@ -44,5 +44,18 @@ disclosure; they are not a guarantee that arbitrary text is safe to share.
 Review source diffs before publishing. Personal review documents are excluded
 even if tracked in the local checkout.
 
+Root modules are registered by filename. New root code or documentation must
+be deliberately added to the publication policy; arbitrary Python/TOML files
+are excluded. Regression tests are published from `tests/`, and only the named
+public guides from `docs/`. `tools/check.py` and `Makefile` provide the source
+quality gate. Run `make check` before publication.
+
 The repository creates no hosted dashboard, cloud inference, recurring
 publisher or paid CI jobs. Runtime data remains exclusively on the Mac.
+The user approved source-only hosted CI; see [docs/CI.md](docs/CI.md). Publication
+requires GitHub workflow permission, and a passing hosted run must be checked
+separately. The user also approved enabling this public repository's
+secret-scanning alerts, secret push protection, vulnerability alerts and
+Dependabot security updates. Their enabled settings were read back after the
+change. Built-in pattern detection complements deliberate source review; it
+does not guarantee that all private material is detected.

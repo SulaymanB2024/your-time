@@ -11,12 +11,11 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from private_io import write_json
 from secure_store import insert_events
-
 
 STATE_DIR = Path.home() / "Library/Application Support/personal-activity-ledger"
 CONFIG_PATH = STATE_DIR / "phone.json"
@@ -28,7 +27,10 @@ LOOKBACK = timedelta(days=3)
 
 def read_intervals(device_id: str):
     from aw_import_screentime.__main__ import (
-        iter_app_in_focus_events, iter_device_files, stitch_intervals_with_state)
+        iter_app_in_focus_events,
+        iter_device_files,
+        stitch_intervals_with_state,
+    )
     files = list(iter_device_files(device_id))
     raw = [event for path in files for event in iter_app_in_focus_events(path)]
     raw.sort(key=lambda event: event.cf_absolute_time)
@@ -82,14 +84,7 @@ def select_sessions(sessions, now: datetime, *, lookback: timedelta | None = LOO
 
 
 def write_private_json(path: Path, value: dict):
-    STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(STATE_DIR, 0o700)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as stream:
-        json.dump(value, stream, indent=2)
-        stream.write("\n")
-    os.replace(temporary, path)
+    write_json(path, value)
 
 
 def main():

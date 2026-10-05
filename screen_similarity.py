@@ -6,7 +6,8 @@ import json
 import re
 import sqlite3
 from collections import defaultdict
-from datetime import date, datetime, timedelta, time as clock_time, timezone
+from datetime import date, datetime, timedelta, timezone
+from datetime import time as clock_time
 
 from daily_analysis import ANALYSIS_DIR, ZONE, private_write
 from index_features import REVISION, distance

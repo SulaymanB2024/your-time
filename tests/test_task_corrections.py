@@ -8,7 +8,6 @@ def test_user_task_label_is_bounded_to_unknown_samples_and_retractable(tmp_path,
     monkeypatch.setattr(secure_store, "STATE_DIR", tmp_path)
     monkeypatch.setattr(secure_store, "DB_PATH", tmp_path / "ledger.sqlite3")
     monkeypatch.setattr(task_corrections, "DB_PATH", tmp_path / "ledger.sqlite3")
-    monkeypatch.setattr(task_corrections, "STATE_DIR", tmp_path)
     monkeypatch.setattr(task_corrections, "read_supported_tags", lambda _: [])
     day = date(2026, 9, 29)
     start = datetime(2026, 9, 29, 5, tzinfo=timezone.utc)

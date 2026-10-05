@@ -11,7 +11,6 @@ from pathlib import Path
 from daily_analysis import ANALYSIS_DIR, private_write
 from secure_store import DB_PATH, insert_events
 
-
 SOURCE = Path.home() / "Library/Application Support/activitywatch/aw-server/peewee-sqlite.v2.db"
 RECEIPT = ANALYSIS_DIR / "legacy-activitywatch-import.json"
 MAX_DURATION = 6 * 3600

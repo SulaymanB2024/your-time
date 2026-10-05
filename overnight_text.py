@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
-import json
 import fcntl
+import json
 import os
 import re
 import subprocess
 import sys
-import stat
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 from overnight_schedule import text_budget
+from private_io import open_private_file, prepare_directory
 from secure_store import STATE_DIR, prepare_private_dir
 from setup_check import write_private
 
@@ -66,8 +66,7 @@ def save(report: dict) -> None:
     write_private(report, STATE_DIR / 'text-nightly-latest-receipt.json')
     if report.get('finished_at_utc'):
         history = STATE_DIR / 'text-run-receipts'
-        history.mkdir(mode=0o700, exist_ok=True)
-        os.chmod(history, 0o700)
+        prepare_directory(history)
         stamp = report['started_at_utc'].replace(':', '-').replace('+', '_')
         path = history / ('text-' + stamp + '.json')
         if path.exists():
@@ -117,11 +116,8 @@ def run() -> dict:
 def main() -> None:
     os.umask(0o077)
     prepare_private_dir()
-    fd = os.open(STATE_DIR / 'text-nightly-controller.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    fd = open_private_file(STATE_DIR / 'text-nightly-controller.lock')
     try:
-        info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-            raise RuntimeError('Text controller lock is not a private owned regular file')
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:

@@ -10,8 +10,8 @@ import subprocess
 import time
 from pathlib import Path
 
+from private_io import prepare_directory
 from secure_store import STATE_DIR, prepare_private_dir
-
 
 MANIFEST = Path(__file__).with_name("vision_model_manifest.json")
 MODEL_DIR = STATE_DIR / "models/qwen3.5-2b-q4km"
@@ -30,8 +30,7 @@ def main() -> None:
     os.umask(0o077)
     config = json.loads(MANIFEST.read_text(encoding="utf-8"))
     prepare_private_dir()
-    MODEL_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(MODEL_DIR, 0o700)
+    prepare_directory(MODEL_DIR)
     for item in config["files"]:
         name = item["name"]
         target = MODEL_DIR / name

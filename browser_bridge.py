@@ -8,14 +8,18 @@ import re
 import struct
 import subprocess
 import sys
-import tempfile
 from datetime import date, datetime, timedelta, timezone
-from pathlib import Path
 
 from local_synthesis import safe_input_text
+from private_io import write_json
 from secure_store import STATE_DIR, insert_events, prepare_private_dir
-from task_corrections import (clear_label, mark_outcome, retract_outcome,
-                              review, set_label)
+from task_corrections import (
+    clear_label,
+    mark_outcome,
+    retract_outcome,
+    review,
+    set_label,
+)
 
 STATUS_PATH = STATE_DIR / "browser-bridge-latest-receipt.json"
 DASHBOARD_REFRESH = "/Users/sulaymanbowles/Projects/personal-activity-ledger/secure_dashboard.zsh"
@@ -35,17 +39,7 @@ def write_status(*, stored: bool, reason: str | None = None) -> None:
              "received_since_start": int(prior.get("received_since_start", 0)) + 1,
              "stored_since_start": int(prior.get("stored_since_start", 0)) + int(stored),
              "last_status": "stored" if stored else reason or "ignored"}
-    fd, temporary = tempfile.mkstemp(prefix=".browser-receipt-", dir=STATE_DIR)
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as output:
-            json.dump(value, output, sort_keys=True)
-            output.write("\n")
-            output.flush()
-            os.fsync(output.fileno())
-        os.replace(temporary, STATUS_PATH)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+    write_json(STATUS_PATH, value)
 
 
 def tab_event(message: dict) -> dict:

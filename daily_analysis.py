@@ -5,16 +5,14 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import sqlite3
-import tempfile
 from collections import Counter, defaultdict
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from private_io import atomic_write
 from secure_store import DB_PATH, STATE_DIR
-
 
 ZONE = ZoneInfo("America/Chicago")
 ANALYSIS_DIR = STATE_DIR / "analyses"
@@ -305,18 +303,7 @@ def analyze(day: date, *, now: datetime | None = None) -> dict:
 
 
 def private_write(path: Path, content: bytes) -> None:
-    ANALYSIS_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(ANALYSIS_DIR, 0o700)
-    fd, temporary = tempfile.mkstemp(prefix=".analysis-", dir=ANALYSIS_DIR)
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "wb") as output:
-            output.write(content)
-            output.flush()
-            os.fsync(output.fileno())
-        os.replace(temporary, path)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+    atomic_write(path, content)
 
 
 def main() -> None:

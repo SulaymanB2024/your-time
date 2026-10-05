@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import math
 from collections import Counter
 from datetime import datetime
-import math
 
 from daily_analysis import union_seconds
 

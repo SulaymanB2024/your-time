@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
-import tempfile
 from pathlib import Path
 
+from private_io import write_json
 
 NAME = "com.sulayman.personal_activity_ledger"
 DESTINATION = (Path.home() / "Library/Application Support/Google/Chrome/NativeMessagingHosts"
@@ -26,19 +25,7 @@ def manifest(extension_id: str) -> dict:
 
 def install(extension_id: str) -> Path:
     value = manifest(extension_id)
-    DESTINATION.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    os.chmod(DESTINATION.parent, 0o700)
-    fd, temporary = tempfile.mkstemp(prefix=".native-host-", dir=DESTINATION.parent)
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as output:
-            json.dump(value, output, indent=2)
-            output.write("\n")
-            output.flush()
-            os.fsync(output.fileno())
-        os.replace(temporary, DESTINATION)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+    write_json(DESTINATION, value)
     return DESTINATION
 
 

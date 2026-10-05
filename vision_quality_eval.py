@@ -13,7 +13,6 @@ import shutil
 import sqlite3
 import statistics
 import subprocess
-from model_execution import run_model
 import tempfile
 import time
 from datetime import datetime, timezone
@@ -21,9 +20,18 @@ from pathlib import Path
 
 from PIL import Image
 
+from model_execution import run_model
+from private_io import atomic_write
 from secure_store import DB_PATH, STATE_DIR
-from vision_batch import LLAMA_CLI, PROMPT, PROMPT_VERSION, SANDBOX_PROFILE, SENSITIVE_RE, clean_description, sha256_file
-
+from vision_batch import (
+    LLAMA_CLI,
+    PROMPT,
+    PROMPT_VERSION,
+    SANDBOX_PROFILE,
+    SENSITIVE_RE,
+    clean_description,
+    sha256_file,
+)
 
 EVAL_DIR = STATE_DIR / "vision-quality-eval"
 SELECTION = EVAL_DIR / "selection.json"
@@ -52,18 +60,7 @@ WORD_RE = re.compile(r"[a-z]{4,}", re.I)
 
 
 def write_private(path: Path, value: str) -> None:
-    EVAL_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(EVAL_DIR, 0o700)
-    fd, temporary = tempfile.mkstemp(prefix=".quality-", dir=EVAL_DIR)
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as output:
-            output.write(value)
-            output.flush()
-            os.fsync(output.fileno())
-        os.replace(temporary, path)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+    atomic_write(path, value.encode("utf-8"))
 
 
 def on_ac_power() -> bool:

@@ -3,21 +3,32 @@
 from __future__ import annotations
 
 import argparse
-from collections import deque
 import fcntl
 import json
 import os
 import time
-from datetime import date, datetime, time as clock_time, timedelta, timezone
+from collections import deque
+from datetime import date, datetime, timedelta, timezone
+from datetime import time as clock_time
 from pathlib import Path
 
-from secure_store import STATE_DIR, connect
 from model_execution import ModelBusy
-from vision_batch import (PROMPT_VERSION, SENSITIVE_RE, ZONE, in_overnight_window,
-                          resource_gate, seconds_until_window_end, sha256_file,
-                          spread_selection, dedupe_by_featureprint, select_images, write_receipt)
+from private_io import open_private_file, prepare_directory
+from secure_store import STATE_DIR, connect
+from vision_batch import (
+    PROMPT_VERSION,
+    SENSITIVE_RE,
+    ZONE,
+    dedupe_by_featureprint,
+    in_overnight_window,
+    resource_gate,
+    seconds_until_window_end,
+    select_images,
+    sha256_file,
+    spread_selection,
+    write_receipt,
+)
 from vision_quality_eval import run_image, verify_models
-
 
 MODEL_PROMPT_VERSION = "fallback_visible_task_v1"
 RECEIPT = STATE_DIR / "vision-fallback-latest-receipt.json"
@@ -253,8 +264,7 @@ def finish_receipt(receipt: dict, started: float) -> None:
     receipt["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
     receipt["elapsed_seconds"] = round(time.monotonic() - started, 1)
     write_receipt(receipt, RECEIPT)
-    HISTORY_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(HISTORY_DIR, 0o700)
+    prepare_directory(HISTORY_DIR)
     history = HISTORY_DIR / ("vision-fallback-" + receipt["started_at_utc"].replace(":", "-").replace("+", "_") + ".json")
     if history.exists():
         raise RuntimeError("Historical fallback receipt already exists")
@@ -359,8 +369,8 @@ def main() -> None:
     if args.days_ago < 1 or args.days_ago > 7:
         parser.error("--days-ago must be 1-7")
     os.umask(0o077)
-    STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-    fd = os.open(LOCK, os.O_RDWR | os.O_CREAT, 0o600)
+    prepare_directory(STATE_DIR)
+    fd = open_private_file(LOCK)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:

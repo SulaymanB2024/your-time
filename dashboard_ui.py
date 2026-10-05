@@ -7,10 +7,8 @@ import hashlib
 import html
 import json
 
-
-from dashboard_styles import CSS
 from dashboard_explore import CONTEXT_JS, INSPECTOR_JS
-
+from dashboard_styles import CSS
 
 JS = CONTEXT_JS + INSPECTOR_JS + r"""
 const data=JSON.parse(document.getElementById('snapshot').textContent);

@@ -1,5 +1,4 @@
 import subprocess
-from pathlib import Path
 
 import project_activity
 import secure_store

@@ -9,17 +9,15 @@ import os
 import re
 import shutil
 import stat
-import tempfile
 import time
 from collections import Counter, deque
 from datetime import datetime, timezone
-from pathlib import Path
 
 from AppKit import NSRunningApplication, NSWorkspace
 from Foundation import NSDate, NSRunLoop
 from Quartz import (
-    CGPreflightScreenCaptureAccess,
     CGEventSourceSecondsSinceLastEventType,
+    CGPreflightScreenCaptureAccess,
     CGSessionCopyCurrentDictionary,
     CGWindowListCopyWindowInfo,
     kCGAnyInputEventType,
@@ -28,8 +26,8 @@ from Quartz import (
     kCGWindowListOptionOnScreenOnly,
 )
 
+from private_io import open_private_file, write_json
 from secure_store import STATE_DIR, insert_events, prepare_private_dir
-
 
 POLL_SECONDS = 5
 IDLE_SECONDS = 180
@@ -224,17 +222,7 @@ def write_status(counts: Counter, *, source: str | None, untitled_streak: int,
               "accessibility_access": ax_access,
               "idle_samples_since_start": counts["mac_idle"],
               "locked_samples_since_start": counts["mac_locked"]}
-    fd, temporary = tempfile.mkstemp(prefix=".mac-status-", dir=STATE_DIR)
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as output:
-            json.dump(status, output, sort_keys=True)
-            output.write("\n")
-            output.flush()
-            os.fsync(output.fileno())
-        os.replace(temporary, STATUS_PATH)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+    write_json(STATUS_PATH, status)
 
 
 def main():
@@ -243,7 +231,7 @@ def main():
     args = parser.parse_args()
     os.umask(0o077)
     prepare_private_dir()
-    fd = os.open(LOCK_PATH, os.O_RDWR | os.O_CREAT, 0o600)
+    fd = open_private_file(LOCK_PATH)
     try:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)

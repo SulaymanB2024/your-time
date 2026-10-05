@@ -20,6 +20,14 @@ This is the installed configuration for one Apple Silicon Mac. It runs locally,
 without a web server, cloud inference, automatic uploads or paid services.
 The public source repository contains no recorded activity or model weights.
 
+## Engineering guides
+
+- [Architecture and module boundaries](docs/ARCHITECTURE.md)
+- [Development and verification](docs/DEVELOPMENT.md)
+- [Security and remaining limits](SECURITY.md)
+- [Source publication](GITHUB.md)
+- [Hosted source checks](docs/CI.md)
+
 ## What runs
 
 | Component | Collection / analysis | Schedule |
@@ -200,10 +208,14 @@ outcomes are stored separately through `task_corrections.py`.
 ## Validation and source delivery
 
 ```sh
-./.venv/bin/pytest -q
+uv sync --locked
+make check
 ```
 
 Tests use synthetic fixtures; live setup checks verify this installation.
+The quality gate checks Python, shell, plist, JSON and JavaScript syntax, Ruff,
+and the regression suite without opening the private ledger. `make audit`
+optionally checks installed dependency versions against public advisories.
 For source-only updates to the public GitHub repository, use
 [publish_source.py](publish_source.py) as described in [GITHUB.md](GITHUB.md).
 Do not push the local historical working branch directly.

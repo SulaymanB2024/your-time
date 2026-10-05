@@ -5,17 +5,14 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import os
 import sqlite3
 import statistics
-import tempfile
 from datetime import datetime, time, timedelta, timezone
-from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from private_io import write_json
 from secure_store import DB_PATH, STATE_DIR
 from vision_batch import select_images
-
 
 ZONE = ZoneInfo("America/Chicago")
 RESULTS_PATH = STATE_DIR / "vision-quality-eval/results.json"
@@ -24,7 +21,7 @@ LATEST_RECEIPT = STATE_DIR / "vision-latest-receipt.json"
 PRIMARY_RECEIPT = STATE_DIR / "vision-fallback-latest-receipt.json"
 HISTORY_DIR = STATE_DIR / "vision-run-receipts"
 CAPACITY_RECEIPT = STATE_DIR / "vision-capacity-plan.json"
-from overnight_schedule import VISION_SECONDS, TOTAL_SECONDS, TEXT_SECONDS
+from overnight_schedule import TEXT_SECONDS, TOTAL_SECONDS, VISION_SECONDS
 
 WINDOW_SECONDS = VISION_SECONDS  # 00:30–07:00 vision; 07:00–08:00 text analysis.
 UTILIZATION = 0.80
@@ -285,19 +282,7 @@ def analysis_for_day(day) -> dict:
 
 
 def private_write(value: dict) -> None:
-    STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(STATE_DIR, 0o700)
-    fd, temporary = tempfile.mkstemp(prefix=".capacity-", dir=STATE_DIR)
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as output:
-            json.dump(value, output, indent=2)
-            output.write("\n")
-            output.flush()
-            os.fsync(output.fileno())
-        os.replace(temporary, CAPACITY_RECEIPT)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+    write_json(CAPACITY_RECEIPT, value)
 
 
 def main() -> None:

@@ -15,7 +15,6 @@ from daily_analysis import ANALYSIS_DIR, ZONE, analyze, private_write
 from secure_store import DB_PATH
 from vision_batch import SENSITIVE_RE, URL_RE
 
-
 MAX_BLOCK_SECONDS = 15 * 60
 MAX_GAP_SECONDS = 20
 MAX_CONTEXT_ITEMS = 4

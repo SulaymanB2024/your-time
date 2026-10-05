@@ -13,7 +13,6 @@ from daily_analysis import ZONE, analyze
 from local_synthesis import validate_text
 from screen_context_tagging import read_supported_tags
 from secure_store import DB_PATH, connect
-from secure_store import STATE_DIR
 
 SLOT_SECONDS = 15 * 60
 MIN_REVIEW_SECONDS = 2 * 60

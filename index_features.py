@@ -9,7 +9,6 @@ import json
 import os
 import sqlite3
 import struct
-import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,6 +16,7 @@ from pathlib import Path
 import Vision
 from Foundation import NSURL
 
+from private_io import open_private_file, write_json
 from secure_store import DB_PATH, STATE_DIR, connect, prepare_private_dir
 from vision_batch import resource_gate
 
@@ -79,19 +79,7 @@ def pending_rows(limit: int) -> tuple[list[tuple[str, str]], int]:
 
 
 def write_receipt(value: dict) -> None:
-    prepare_private_dir()
-    payload = {"checked_at_utc": datetime.now(timezone.utc).isoformat(), **value}
-    fd, temporary = tempfile.mkstemp(prefix=".feature-receipt-", dir=STATE_DIR)
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as output:
-            json.dump(payload, output, sort_keys=True)
-            output.write("\n")
-            output.flush()
-            os.fsync(output.fileno())
-        os.replace(temporary, STATUS_PATH)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+    write_json(STATUS_PATH, {"checked_at_utc": datetime.now(timezone.utc).isoformat(), **value})
 
 
 def run(limit: int, *, allow_battery: bool = False) -> dict:
@@ -142,7 +130,7 @@ def main() -> None:
     args = parser.parse_args()
     os.umask(0o077)
     prepare_private_dir()
-    fd = os.open(LOCK_PATH, os.O_RDWR | os.O_CREAT, 0o600)
+    fd = open_private_file(LOCK_PATH)
     try:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)

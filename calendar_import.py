@@ -7,12 +7,12 @@ import hashlib
 import json
 import os
 import re
-import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from local_synthesis import safe_input_text
-from secure_store import STATE_DIR, connect, prepare_private_dir
+from private_io import write_json
+from secure_store import STATE_DIR, connect
 
 SCOPE_PATH = STATE_DIR / "calendar-scope.json"
 EXPORT_PATH = STATE_DIR / "calendar-eventkit-export.json"
@@ -87,19 +87,7 @@ def rows_from_export(scope: dict, payload: dict, now: datetime) -> tuple[list[tu
 
 
 def write_receipt(value: dict) -> None:
-    prepare_private_dir()
-    fd, temporary = tempfile.mkstemp(prefix=".calendar-receipt-", dir=STATE_DIR)
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as output:
-            json.dump({"checked_at_utc": datetime.now(timezone.utc).isoformat(), **value},
-                      output, sort_keys=True)
-            output.write("\n")
-            output.flush()
-            os.fsync(output.fileno())
-        os.replace(temporary, STATUS_PATH)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+    write_json(STATUS_PATH, {"checked_at_utc": datetime.now(timezone.utc).isoformat(), **value})
 
 
 def run() -> dict:

@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
-import secure_store
 import index_screenshots
+import secure_store
 from index_screenshots import nearby_mac_window
 
 

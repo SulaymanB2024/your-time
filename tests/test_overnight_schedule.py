@@ -1,10 +1,10 @@
-from datetime import datetime, timezone
 import importlib
 import sys
+from datetime import datetime, timezone
 
 import pytest
 
-from overnight_schedule import in_window, remaining_seconds, text_budget, VISION_END
+from overnight_schedule import VISION_END, in_window, remaining_seconds, text_budget
 
 
 def local_utc(hour, minute=0):
@@ -51,6 +51,7 @@ def test_scheduled_text_workers_do_not_load_models_outside_the_window(module_nam
 
 def test_resumed_tagger_rechecks_wall_clock_before_inference(tmp_path, monkeypatch):
     from datetime import date
+
     import overnight_schedule
     import window_topic_tagging as worker
     monkeypatch.setattr(worker, 'ANALYSIS_DIR', tmp_path)
@@ -68,8 +69,8 @@ def test_resumed_tagger_rechecks_wall_clock_before_inference(tmp_path, monkeypat
 
 @pytest.mark.parametrize('stage_index', [0, 1, 2])
 def test_exact_scheduled_stage_arguments_are_accepted(stage_index, monkeypatch, capsys):
-    import overnight_text
     import overnight_schedule
+    import overnight_text
     _, script, args = overnight_text.STAGES[stage_index]
     module = importlib.import_module(script.removesuffix('.py'))
     monkeypatch.setattr(sys, 'argv', [script, *args])

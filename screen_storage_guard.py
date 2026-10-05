@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import os
-import signal
 import shutil
+import signal
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
+from private_io import prepare_directory, write_json
 
 STATE_DIR = Path.home() / "Library/Application Support/personal-activity-ledger"
 STATUS_PATH = STATE_DIR / "screen-storage-status.json"
@@ -51,8 +52,7 @@ def recorder_pid() -> int | None:
 
 
 def main() -> None:
-    STATE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
-    os.chmod(STATE_DIR, 0o700)
+    prepare_directory(STATE_DIR)
     free = shutil.disk_usage(STATE_DIR).free
     below = free < STOP_BELOW_BYTES
     pid = recorder_pid()
@@ -81,12 +81,7 @@ def main() -> None:
         "recorder_agent_was_enabled": agents_enabled,
         "stopped_this_run": stopped,
     }
-    tmp = STATUS_PATH.with_suffix(".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as stream:
-        json.dump(status, stream, indent=2)
-        stream.write("\n")
-    os.replace(tmp, STATUS_PATH)
+    write_json(STATUS_PATH, status)
     print(json.dumps(status, sort_keys=True))
 
 

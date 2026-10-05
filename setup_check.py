@@ -16,12 +16,12 @@ import re
 import shutil
 import sqlite3
 import subprocess
-import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from overnight_schedule import START, VISION_END, END
+from overnight_schedule import END, START, VISION_END
+from private_io import write_json
 
 PROJECT = Path(__file__).resolve().parent
 STATE = Path.home() / 'Library/Application Support/personal-activity-ledger'
@@ -334,17 +334,7 @@ def inspect(*, hash_models: bool = False) -> dict:
 
 
 def write_private(report: dict, path: Path) -> None:
-    fd, temporary = tempfile.mkstemp(prefix='.setup-', dir=path.parent)
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, 'w') as stream:
-            json.dump(report, stream, sort_keys=True, indent=2)
-            stream.write('\n')
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+    write_json(path, report)
 
 
 def main() -> None:

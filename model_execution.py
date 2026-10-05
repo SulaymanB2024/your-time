@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import fcntl
 import os
-from pathlib import Path
-import stat
 import subprocess
+from pathlib import Path
+
+from private_io import open_private_file
 
 
 class ModelBusy(RuntimeError):
@@ -14,12 +15,8 @@ class ModelBusy(RuntimeError):
 
 
 def run_model(command: list[str], *, state_dir: Path, **kwargs):
-    fd = os.open(state_dir / "local-model-execution.lock",
-                 os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    fd = open_private_file(state_dir / "local-model-execution.lock")
     try:
-        info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-            raise RuntimeError("Local model lock is not a private owned regular file")
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:

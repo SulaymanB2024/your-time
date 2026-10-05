@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import shutil
 import sqlite3
 from collections import Counter
@@ -13,8 +12,8 @@ from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from private_io import atomic_write
 from secure_store import DB_PATH, STATE_DIR
-
 
 ZONE = ZoneInfo("America/Chicago")
 SCREENSHOT_DIRS = [STATE_DIR / "pensieve/screenshots", STATE_DIR / "screenshots"]
@@ -118,13 +117,7 @@ def ledger_events(start_utc: datetime, end_utc: datetime):
 
 
 def private_write(path: Path, content: bytes):
-    EXPORT_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(EXPORT_DIR, 0o700)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "wb") as output:
-        output.write(content)
-    os.replace(temporary, path)
+    atomic_write(path, content)
 
 
 def export_day(day, *, write: bool = False):

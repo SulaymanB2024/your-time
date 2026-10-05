@@ -6,7 +6,6 @@ import argparse
 import fcntl
 import json
 import os
-import tempfile
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -14,9 +13,9 @@ from pathlib import Path
 from ocrmac import ocrmac
 from PIL import Image
 
+from private_io import open_private_file, write_json
 from secure_store import STATE_DIR, connect, prepare_private_dir
 from vision_batch import in_overnight_window
-
 
 SCREENSHOT_DIRS = [STATE_DIR / "pensieve/screenshots", STATE_DIR / "screenshots"]
 OCR_RECEIPT = STATE_DIR / "ocr-latest-receipt.json"
@@ -202,21 +201,10 @@ def run(limit: int, geometry_backfill_limit: int = 0) -> dict:
 
 
 def write_receipt(result: dict) -> None:
-    prepare_private_dir()
     value = {"checked_at_utc": datetime.now(timezone.utc).isoformat(),
              "status": "partial" if result["pending_after_run"] or result["failed"] else "complete",
              **result}
-    fd, temporary = tempfile.mkstemp(prefix=".ocr-receipt-", dir=STATE_DIR)
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as output:
-            json.dump(value, output, sort_keys=True)
-            output.write("\n")
-            output.flush()
-            os.fsync(output.fileno())
-        os.replace(temporary, OCR_RECEIPT)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+    write_json(OCR_RECEIPT, value)
 
 
 def main():
@@ -225,7 +213,7 @@ def main():
     parser.add_argument("--geometry-backfill-limit", type=int, default=0)
     args = parser.parse_args()
     prepare_private_dir()
-    fd = os.open(OCR_LOCK, os.O_RDWR | os.O_CREAT, 0o600)
+    fd = open_private_file(OCR_LOCK)
     try:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)

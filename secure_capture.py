@@ -11,15 +11,16 @@ import shutil
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from io import BytesIO
 from pathlib import Path
 
+from mss import mss
 from PIL import Image, ImageChops, ImageStat
 from Quartz import CGSessionCopyCurrentDictionary
-from mss import mss
 
 from mac_activity import frontmost_window
+from private_io import atomic_write, open_private_file, prepare_directory, write_json
 from secure_store import STATE_DIR, connect, prepare_private_dir
-
 
 SCREENSHOT_DIR = STATE_DIR / "screenshots"
 LOCK_PATH = STATE_DIR / "screen-capture.lock"
@@ -92,29 +93,16 @@ def should_save_frame(previous: FrameState | None, digest: bytes, preview: Image
 
 def private_day_dir(now: datetime) -> Path:
     prepare_private_dir()
-    SCREENSHOT_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(SCREENSHOT_DIR, 0o700)
+    prepare_directory(SCREENSHOT_DIR)
     day_dir = SCREENSHOT_DIR / now.strftime("%Y%m%d")
-    day_dir.mkdir(mode=0o700, exist_ok=True)
-    os.chmod(day_dir, 0o700)
+    prepare_directory(day_dir)
     return day_dir
 
 
 def save_private_image(image: Image.Image, path: Path) -> None:
-    temporary = path.with_name("." + path.name + ".tmp")
-    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    try:
-        with os.fdopen(fd, "wb") as output:
-            image.save(output, format="WEBP", quality=75, method=3)
-            output.flush()
-            os.fsync(output.fileno())
-        os.replace(temporary, path)
-    except Exception:
-        try:
-            temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
-        raise
+    payload = BytesIO()
+    image.save(payload, format="WEBP", quality=75, method=3)
+    atomic_write(path, payload.getvalue())
 
 
 def capture_once(previous_frames: dict[int, FrameState]) -> CaptureResult:
@@ -172,12 +160,7 @@ def write_status(result: CaptureResult) -> None:
         "capture_blocked_reason": result.blocked_reason,
         "free_bytes": shutil.disk_usage(STATE_DIR).free,
     }
-    temporary = STATUS_PATH.with_suffix(".tmp")
-    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as output:
-        json.dump(status, output)
-        output.write("\n")
-    os.replace(temporary, STATUS_PATH)
+    write_json(STATUS_PATH, status)
 
 
 def main() -> None:
@@ -185,7 +168,7 @@ def main() -> None:
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
     prepare_private_dir()
-    fd = os.open(LOCK_PATH, os.O_RDWR | os.O_CREAT, 0o600)
+    fd = open_private_file(LOCK_PATH)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:

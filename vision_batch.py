@@ -7,24 +7,25 @@ import atexit
 import fcntl
 import hashlib
 import json
+import math
 import os
 import re
-import math
-import struct
 import shutil
+import struct
 import subprocess
 import tempfile
 import time
-from datetime import date, datetime, time as clock_time, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from datetime import time as clock_time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from PIL import Image
 
-from secure_store import STATE_DIR, connect
 from model_execution import ModelBusy, run_model
-from overnight_schedule import in_window, remaining_seconds, VISION_END, VISION_SECONDS
-
+from overnight_schedule import VISION_END, VISION_SECONDS, in_window, remaining_seconds
+from private_io import open_private_file, prepare_directory, write_json
+from secure_store import STATE_DIR, connect
 
 ZONE = ZoneInfo("America/Chicago")
 PROJECT_DIR = Path(__file__).resolve().parent
@@ -234,14 +235,7 @@ def describe_image(path: Path, model: Path, projector: Path) -> tuple[str | None
 
 
 def write_receipt(value: dict, path: Path | None = None) -> None:
-    os.umask(0o077)
-    path = path or RECEIPT_PATH
-    temporary = path.with_suffix(".tmp")
-    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as output:
-        json.dump(value, output, indent=2)
-        output.write("\n")
-    os.replace(temporary, path)
+    write_json(path or RECEIPT_PATH, value)
 
 
 def historical_receipt_path(started_at_utc: str) -> Path:
@@ -377,7 +371,7 @@ def main() -> None:
     parser.add_argument("--benchmark-now", action="store_true", help="Ignore AC and time window; at most three images")
     args = parser.parse_args()
     os.umask(0o077)
-    fd = os.open(LOCK_PATH, os.O_RDWR | os.O_CREAT, 0o600)
+    fd = open_private_file(LOCK_PATH)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
@@ -418,8 +412,7 @@ def main() -> None:
         nightly["stop_reason"] = "processed_available_days"
     nightly["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
     write_receipt(nightly, STATE_DIR / "vision-nightly-receipt.json")
-    HISTORICAL_RECEIPT_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(HISTORICAL_RECEIPT_DIR, 0o700)
+    prepare_directory(HISTORICAL_RECEIPT_DIR)
     history_path = historical_receipt_path(nightly["started_at_utc"])
     if history_path.exists():
         raise RuntimeError("Historical overnight receipt already exists")

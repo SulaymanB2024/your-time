@@ -1,4 +1,3 @@
-import copy
 from datetime import datetime, timedelta, timezone
 
 from daily_analysis import mac_segments, phone_analysis

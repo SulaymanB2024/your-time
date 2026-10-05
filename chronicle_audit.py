@@ -3,24 +3,24 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter
-from datetime import datetime, timedelta, timezone
 import json
 import os
-from pathlib import Path
 import re
 import shutil
 import sqlite3
 import statistics
 import subprocess
+from collections import Counter
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
+from behavior_analysis import build as build_behavior
 from chronicle_rollup import private_write_if_changed, work_artifacts
 from daily_analysis import ZONE, analyze
 from data_quality import check_analysis
-from behavior_analysis import build as build_behavior
 from screen_context_tagging import allocate_visible_context, read_supported_tags
-from topic_allocation import allocate
 from secure_store import DB_PATH, STATE_DIR
+from topic_allocation import allocate
 from vision_capacity import nearest_rank, sustained_primary_nights
 from vision_quality_eval import proxies
 

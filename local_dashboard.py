@@ -2,34 +2,43 @@
 
 from __future__ import annotations
 
-import hashlib
 import fcntl
+import hashlib
 import json
 import os
 import shutil
 import subprocess
-import tempfile
 from collections import Counter
-from datetime import datetime, time as clock_time, timedelta, timezone
+from datetime import datetime, timedelta, timezone
+from datetime import time as clock_time
 from pathlib import Path
 
+from behavior_analysis import aggregate as aggregate_behavior
+from behavior_analysis import build as build_behavior
+from chronicle_rollup import (
+    DAYS,
+    MONTHS,
+    YEARS,
+    calendar_summary,
+    local_boundaries,
+    work_artifacts,
+)
+from chronicle_rollup import read_json as read_rollup
+from chronicle_rollup import refresh as refresh_chronicle
 from daily_analysis import ZONE, analyze, union_seconds
-from data_quality import check_analysis
-from dashboard_timeline import build_timeline
-from behavior_analysis import build as build_behavior, aggregate as aggregate_behavior
 from daily_focus import build as focus_build
-from chronicle_rollup import (DAYS, MONTHS, YEARS, local_boundaries,
-                              read_json as read_rollup, refresh as refresh_chronicle,
-                              work_artifacts, calendar_summary)
-from screen_context_tagging import allocate_visible_context, read_supported_tags
+from dashboard_timeline import build_timeline
+from data_quality import check_analysis
 from local_synthesis import block_projection, fingerprint, summary_is_current
-from task_corrections import (active_outcomes, summary as correction_summary,
-                              review as correction_review)
-from window_topic_tagging import window_id
+from private_io import atomic_write, open_private_file, prepare_directory
+from screen_context_tagging import allocate_visible_context, read_supported_tags
+from secure_store import STATE_DIR
+from task_corrections import active_outcomes
+from task_corrections import review as correction_review
+from task_corrections import summary as correction_summary
 from topic_allocation import allocate, broad_context
 from vision_batch import SENSITIVE_RE
-from secure_store import STATE_DIR
-
+from window_topic_tagging import window_id
 
 DASHBOARD_DIR = STATE_DIR / "dashboard"
 INDEX = DASHBOARD_DIR / "index.html"
@@ -201,18 +210,7 @@ def read_json(path: Path) -> dict:
 
 
 def private_write(path: Path, payload: bytes) -> None:
-    DASHBOARD_DIR.mkdir(parents=True, mode=0o700, exist_ok=True)
-    os.chmod(DASHBOARD_DIR, 0o700)
-    fd, temporary = tempfile.mkstemp(prefix=".dashboard-", dir=DASHBOARD_DIR)
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "wb") as output:
-            output.write(payload)
-            output.flush()
-            os.fsync(output.fileno())
-        os.replace(temporary, path)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+    atomic_write(path, payload)
 
 
 def runtime_snapshot(day=None) -> dict:
@@ -449,8 +447,8 @@ from dashboard_ui import render
 
 def main() -> None:
     os.umask(0o077)
-    STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-    fd = os.open(LOCK, os.O_RDWR | os.O_CREAT, 0o600)
+    prepare_directory(STATE_DIR)
+    fd = open_private_file(LOCK)
     try:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)

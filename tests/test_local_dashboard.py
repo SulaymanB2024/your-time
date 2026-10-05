@@ -1,5 +1,4 @@
 import hashlib
-import json
 from datetime import datetime, timezone
 
 import local_dashboard
@@ -121,8 +120,8 @@ def test_day_score_keeps_titled_and_untitled_time_visible_together():
 
 
 def test_stale_synthesis_is_hidden_when_source_evidence_changes(monkeypatch):
-    import copy
     from test_data_quality import valid_report
+
     from local_synthesis import block_projection, fingerprint
     analysis = valid_report()
     analysis.update(day_local="2026-10-03", complete_day=True)
@@ -154,7 +153,13 @@ def test_stale_synthesis_is_hidden_when_source_evidence_changes(monkeypatch):
 
 def test_partial_summary_uses_current_support_and_stays_explicitly_partial(monkeypatch):
     from test_data_quality import valid_report
-    from local_synthesis import block_projection, fingerprint, summary_fingerprint, DAY_PROMPT_VERSION
+
+    from local_synthesis import (
+        DAY_PROMPT_VERSION,
+        block_projection,
+        fingerprint,
+        summary_fingerprint,
+    )
     analysis = valid_report()
     analysis.update(day_local="2026-10-03", complete_day=True)
     analysis["visual"].update(new_capture_ocr_pending=0, vision_status_counts={})

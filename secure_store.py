@@ -10,23 +10,28 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+from private_io import open_private_file, prepare_directory, validate_file
 
 STATE_DIR = Path.home() / "Library/Application Support/personal-activity-ledger"
 DB_PATH = STATE_DIR / "activity-ledger.sqlite3"
 
 
 def prepare_private_dir() -> None:
-    STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(STATE_DIR, 0o700)
+    prepare_directory(STATE_DIR)
 
 
 @contextmanager
 def connect():
     prepare_private_dir()
-    previous_umask = os.umask(0o077)
+    # Create mode 0600 before SQLite opens it. SQLite uses the database mode
+    # for its WAL/SHM files; do not mutate the process-wide umask in a context
+    # manager that can be used by more than one thread.
+    os.close(open_private_file(DB_PATH))
+    for suffix in ("-wal", "-shm", "-journal"):
+        validate_file(DB_PATH.with_name(DB_PATH.name + suffix))
+    connection = None
     try:
         connection = sqlite3.connect(DB_PATH, timeout=10)
-        os.chmod(DB_PATH, 0o600)
         connection.execute("PRAGMA busy_timeout=10000")
         connection.execute("PRAGMA journal_mode=WAL")
         connection.executescript(
@@ -135,10 +140,13 @@ def connect():
             connection.execute("ALTER TABLE calendar_items ADD COLUMN all_day INTEGER")
         yield connection
         connection.commit()
+    except BaseException:
+        if connection is not None:
+            connection.rollback()
+        raise
     finally:
-        if "connection" in locals():
+        if connection is not None:
             connection.close()
-        os.umask(previous_umask)
 
 
 def insert_events(rows: list[dict]) -> int:

@@ -1,6 +1,5 @@
-from pathlib import Path
-from contextlib import contextmanager
 import sqlite3
+from contextlib import contextmanager
 
 from watchdog.events import FileModifiedEvent
 

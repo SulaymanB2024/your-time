@@ -8,17 +8,17 @@ import json
 import os
 import re
 import sqlite3
-import tempfile
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from daily_analysis import ZONE, analyze, union_seconds
+from private_io import atomic_write, prepare_directory, validate_file
 from screen_context_tagging import allocate_visible_context, read_supported_tags
-from task_corrections import active_outcomes, summary as correction_summary
 from secure_store import DB_PATH, STATE_DIR
+from task_corrections import active_outcomes
+from task_corrections import summary as correction_summary
 from topic_allocation import allocate
-
 
 ROOT = STATE_DIR / "chronicle"
 DAYS = ROOT / "days"
@@ -29,20 +29,11 @@ VERSION = 3
 
 def private_write_if_changed(path: Path, value: dict) -> bool:
     payload = (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode()
-    path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
-    os.chmod(path.parent, 0o700)
+    prepare_directory(path.parent)
+    validate_file(path)
     if path.is_file() and path.read_bytes() == payload:
         return False
-    fd, temporary = tempfile.mkstemp(prefix=".chronicle-", dir=path.parent)
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "wb") as output:
-            output.write(payload)
-            output.flush()
-            os.fsync(output.fileno())
-        os.replace(temporary, path)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+    atomic_write(path, payload)
     return True
 
 
@@ -145,7 +136,8 @@ def calendar_summary(day: date) -> dict:
 
 
 def day_summary(day: date, *, now: datetime | None = None) -> dict:
-    from behavior_analysis import build as build_behavior, compact
+    from behavior_analysis import build as build_behavior
+    from behavior_analysis import compact
     report = analyze(day, now=now)
     start, full_end = local_boundaries(day)
     analyzed_end = datetime.fromisoformat(report["analyzed_through_utc"])
@@ -312,8 +304,7 @@ def refresh(*, now: datetime | None = None, recent_days: int = 8,
     if first is None:
         return {"status": "no_activity_data", "days_written": 0}
     os.umask(0o077)
-    ROOT.mkdir(parents=True, mode=0o700, exist_ok=True)
-    os.chmod(ROOT, 0o700)
+    prepare_directory(ROOT)
     changed_months = set()
     days_written = 0
     cursor = first

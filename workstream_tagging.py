@@ -9,16 +9,23 @@ import json
 import os
 import re
 import subprocess
-import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from daily_analysis import ANALYSIS_DIR, ZONE, private_write
-from local_synthesis import (LOCK, MODEL_MANIFEST, model_call, read_json_file,
-                             safe_input_text, validate_text, verify_model, vision_busy)
+from local_synthesis import (
+    LOCK,
+    MODEL_MANIFEST,
+    model_call,
+    read_json_file,
+    safe_input_text,
+    validate_text,
+    verify_model,
+    vision_busy,
+)
+from private_io import open_private_file, prepare_directory
 from secure_store import STATE_DIR
 from vision_batch import resource_gate
-
 
 VERSION = "workstreams_v2"
 GENERIC_WORDS = {"work", "working", "activity", "session", "online", "browser", "browsing",
@@ -202,8 +209,8 @@ def main() -> None:
     if args.allow_battery and len(ages) != 1:
         parser.error("--allow-battery requires one --days-ago")
     os.umask(0o077)
-    STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-    fd = os.open(LOCK, os.O_RDWR | os.O_CREAT, 0o600)
+    prepare_directory(STATE_DIR)
+    fd = open_private_file(LOCK)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:

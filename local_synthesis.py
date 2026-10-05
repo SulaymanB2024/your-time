@@ -16,10 +16,17 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from daily_analysis import ANALYSIS_DIR, ZONE, private_write
-from secure_store import STATE_DIR
 from model_execution import ModelBusy, run_model
-from vision_batch import EMAIL_RE, LONG_NUMBER_RE, SENSITIVE_RE, URL_RE, resource_gate, sha256_file
-
+from private_io import open_private_file, prepare_directory
+from secure_store import STATE_DIR
+from vision_batch import (
+    EMAIL_RE,
+    LONG_NUMBER_RE,
+    SENSITIVE_RE,
+    URL_RE,
+    resource_gate,
+    sha256_file,
+)
 
 PROJECT = Path(__file__).resolve().parent
 MODEL_MANIFEST = PROJECT / "vision_quality_model_manifest.json"
@@ -89,7 +96,7 @@ def vision_busy() -> bool:
     for path in VISION_LOCKS:
         if not path.exists():
             continue
-        fd = os.open(path, os.O_RDWR)
+        fd = open_private_file(path, os.O_RDWR)
         try:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -556,8 +563,8 @@ def main() -> None:
     if any(age < 1 or age > 7 for age in ages):
         parser.error("--days-ago must be 1-7")
     os.umask(0o077)
-    STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-    fd = os.open(LOCK, os.O_RDWR | os.O_CREAT, 0o600)
+    prepare_directory(STATE_DIR)
+    fd = open_private_file(LOCK)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:

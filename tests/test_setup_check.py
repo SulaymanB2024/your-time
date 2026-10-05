@@ -1,10 +1,9 @@
 import hashlib
 import json
-import os
 import plistlib
 import subprocess
-from pathlib import Path
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import setup_check
 

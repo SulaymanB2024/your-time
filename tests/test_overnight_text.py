@@ -1,5 +1,5 @@
-import json
 import fcntl
+import json
 import os
 import subprocess
 

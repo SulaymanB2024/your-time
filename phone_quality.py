@@ -6,12 +6,11 @@ import argparse
 import json
 import os
 import sqlite3
-import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from private_io import open_private_file, prepare_directory, write_json
 from secure_store import DB_PATH, STATE_DIR
-
 
 PHONE_RECEIPT = STATE_DIR / "phone-latest-receipt.json"
 QUALITY_RECEIPT = STATE_DIR / "phone-quality-latest.json"
@@ -73,26 +72,13 @@ def evaluate(receipt: dict | None, ledger_latest: datetime | None,
 
 
 def private_write(path: Path, value: dict) -> None:
-    STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(STATE_DIR, 0o700)
-    fd, temporary = tempfile.mkstemp(prefix=".phone-quality-", dir=STATE_DIR)
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as output:
-            json.dump(value, output, indent=2)
-            output.write("\n")
-            output.flush()
-            os.fsync(output.fileno())
-        os.replace(temporary, path)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+    write_json(path, value)
 
 
 def append_history(value: dict) -> None:
-    HISTORY_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(HISTORY_DIR, 0o700)
+    prepare_directory(HISTORY_DIR)
     path = HISTORY_DIR / (datetime.fromisoformat(value["checked_at_utc"]).date().isoformat() + ".jsonl")
-    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    fd = open_private_file(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT)
     os.fchmod(fd, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as output:
         output.write(json.dumps(value, sort_keys=True) + "\n")

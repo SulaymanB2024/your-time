@@ -1,5 +1,4 @@
 import io
-import json
 import struct
 from datetime import datetime, timezone
 

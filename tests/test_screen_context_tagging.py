@@ -1,6 +1,5 @@
-from datetime import date
-
 import json
+from datetime import date
 
 import screen_context_tagging
 from screen_context_tagging import allocate_visible_context, make_report, validate_batch

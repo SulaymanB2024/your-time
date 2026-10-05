@@ -1,7 +1,7 @@
-from collections import Counter
 import json
 import os
 import time
+from collections import Counter
 
 import mac_activity
 from mac_activity import classify, select_window

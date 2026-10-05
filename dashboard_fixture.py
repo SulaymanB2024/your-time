@@ -3,10 +3,10 @@
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 
-from behavior_analysis import build, compact, aggregate
+from behavior_analysis import aggregate, build, compact
+from dashboard_timeline import build_timeline
 from local_dashboard import activity_score, time_of_day
 from window_topic_tagging import window_id
-from dashboard_timeline import build_timeline
 
 
 def fixture() -> dict:

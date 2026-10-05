@@ -11,8 +11,8 @@ import subprocess
 import time
 from pathlib import Path
 
+from private_io import prepare_directory
 from secure_store import STATE_DIR, prepare_private_dir
-
 
 CANDIDATES = {
     "9b": (Path(__file__).with_name("vision_quality_model_manifest.json"),
@@ -93,8 +93,7 @@ def main() -> None:
     manifest_path, target_dir = CANDIDATES[args.candidate]
     config = json.loads(manifest_path.read_text())
     prepare_private_dir()
-    target_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(target_dir, 0o700)
+    prepare_directory(target_dir)
     for item in config["files"]:
         download(item, config["repository"], config["revision"], target_dir,
                  allow_battery=args.allow_battery)

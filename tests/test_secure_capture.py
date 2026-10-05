@@ -4,7 +4,12 @@ from PIL import Image
 
 import secure_capture
 import secure_store
-from secure_capture import FrameState, save_private_image, sensitive_context, should_save_frame
+from secure_capture import (
+    FrameState,
+    save_private_image,
+    sensitive_context,
+    should_save_frame,
+)
 
 
 def test_screenshot_write_is_private_and_atomic(tmp_path):
