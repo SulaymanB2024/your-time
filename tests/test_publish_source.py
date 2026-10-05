@@ -123,7 +123,7 @@ def test_publisher_accepts_only_the_authorized_public_repository(monkeypatch):
     publish_source.verify_repository()
 
 
-@pytest.mark.parametrize('path', ['private_io.py', 'pyproject.toml', 'tests/test_private_io.py',
+@pytest.mark.parametrize('path', ['private_io.py', 'pyproject.toml', 'tests/test_private_io.py', 'tests/conftest.py',
                                  'docs/ARCHITECTURE.md', 'tools/check.py', '.github/workflows/checks.yml'])
 def test_registered_source_and_test_locations_are_publishable(path):
     assert allowed(path)

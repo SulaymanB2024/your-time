@@ -43,10 +43,15 @@ def featureprint(path: Path) -> tuple[bytes, int]:
     success, error = handler.performRequests_error_([request], None)
     results = request.results() or []
     if not success or error or len(results) != 1:
-        raise ValueError("Local Vision feature print unavailable")
+        # A numeric framework code is safe for synthetic CI diagnostics. Never
+        # include NSError descriptions, which can contain private file paths.
+        code = int(error.code()) if error else None
+        raise ValueError(f"Local Vision feature print unavailable (code={code})")
     observation = results[0]
     if observation.elementType() != 1 or observation.elementCount() != 768:
-        raise ValueError("Unexpected feature print format")
+        raise ValueError("Unexpected feature print format "
+                         f"(type={int(observation.elementType())}, "
+                         f"count={int(observation.elementCount())})")
     vector = bytes(observation.data())
     if len(vector) != 768 * 4:
         raise ValueError("Unexpected feature print length")

@@ -18,6 +18,11 @@ JavaScript syntax, and runs synthetic tests. It does not open the activity
 database, take screenshots, run a model, change privacy settings or load jobs.
 Native APIs are mocked in capture tests; the child-lock test runs a short
 synthetic process under the network-denying sandbox.
+The test configuration selects a temporary home before importing runtime
+modules and rejects Python file/SQLite access to the user's real `Library`.
+Database and image fixtures remain synthetic even when running tests on an
+installed Mac. This guard prevents accidental access; it is not an OS sandbox
+for arbitrary native calls or subprocesses.
 
 For a focused change:
 

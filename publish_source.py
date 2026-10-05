@@ -119,6 +119,7 @@ def allowed(path: str) -> bool:
         return path in ROOT_SOURCE_FILES
     return (len(item.parts) == 2 and
             ((item.parts[0] == 'tests' and item.name.startswith('test_') and item.suffix == '.py') or
+             (path == 'tests/conftest.py') or
              (path == 'tools/check.py') or
              (item.parts[0] == 'launchagents' and item.suffix == '.plist') or
              (item.parts[0] == 'native' and item.suffix in {'.m', '.plist'}) or

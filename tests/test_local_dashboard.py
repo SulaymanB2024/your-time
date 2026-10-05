@@ -47,6 +47,11 @@ def test_snapshot_reuses_per_device_totals_without_adding_them(monkeypatch):
     monkeypatch.setattr(local_dashboard, "focus_build", lambda day, now=None: {"blocks": []})
     monkeypatch.setattr(local_dashboard, "read_json", lambda path: {})
     monkeypatch.setattr(local_dashboard, "read_supported_tags", lambda day: [])
+    monkeypatch.setattr(local_dashboard, "correction_summary", lambda *_: [])
+    monkeypatch.setattr(local_dashboard, "correction_review", lambda *_: [])
+    monkeypatch.setattr(local_dashboard, "active_outcomes", lambda *_: [])
+    monkeypatch.setattr(local_dashboard, "calendar_summary", lambda *_: {})
+    monkeypatch.setattr(local_dashboard, "work_artifacts", lambda *_: {})
     item = local_dashboard.daily_snapshot(datetime(2026, 9, 29).date(),
                                           datetime(2026, 9, 29, tzinfo=timezone.utc))
     assert item["mac_active_seconds"] == 60

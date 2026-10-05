@@ -19,6 +19,9 @@ def test_private_feature_print_index_and_distance(tmp_path, monkeypatch):
     image = Image.new("RGB", (128, 128), "white")
     ImageDraw.Draw(image).rectangle((20, 20, 90, 90), fill="black")
     image.save(path)
+    # Surface a safe framework code instead of hiding the integration failure
+    # behind the worker's aggregate failure count.
+    index_features.featureprint(path)
     now = datetime.now(timezone.utc).isoformat()
     with secure_store.connect() as database:
         database.execute(
