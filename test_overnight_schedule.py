@@ -64,3 +64,15 @@ def test_resumed_tagger_rechecks_wall_clock_before_inference(tmp_path, monkeypat
                             max_seconds=500, overnight_only=True)
     assert report['stop_reason'] == 'text_window_ended'
     assert report['tagged_titles'] == 0
+
+
+@pytest.mark.parametrize('stage_index', [0, 1, 2])
+def test_exact_scheduled_stage_arguments_are_accepted(stage_index, monkeypatch, capsys):
+    import overnight_text
+    import overnight_schedule
+    _, script, args = overnight_text.STAGES[stage_index]
+    module = importlib.import_module(script.removesuffix('.py'))
+    monkeypatch.setattr(sys, 'argv', [script, *args])
+    monkeypatch.setattr(overnight_schedule, 'text_budget', lambda *_: 0)
+    module.main()  # Argument validation happens before the outside-window return.
+    assert 'outside_text_window' in capsys.readouterr().out

@@ -27,7 +27,7 @@ VERSION = "screen_context_v2"
 MAX_PER_DAY = 240
 BUCKET_MINUTES = 2
 BATCH_SIZE = 5
-MAX_RUN_SECONDS = 10 * 60
+MAX_RUN_SECONDS = 15 * 60  # Approved final text stage: clipped to the 08:00 cutoff.
 SCHEMA = {"type": "object", "additionalProperties": False,
           "properties": {"tags": {"type": "array", "items": {"type": "object",
               "additionalProperties": False,

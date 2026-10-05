@@ -134,6 +134,13 @@ The current 9B latest receipt is `vision-fallback-latest-receipt.json`.
 `vision-nightly-receipt.json` is a legacy 2B receipt, not proof of the current
 9B run. Historical receipts and `vision_capacity.py` support throughput checks.
 
+Every finished vision attempt, including a power/resource skip, now has an
+immutable historical receipt. `text-nightly-latest-receipt.json` and
+`text-run-receipts` record each text stage's return code, aggregate results and
+elapsed time. A failed stage does not suppress the later stages or dashboard
+refresh. Exit zero with a resource gate is not described as completed analysis.
+The three scheduled text-stage argument lists are validated by regression tests.
+
 ## Setup checks and controls
 
 From the source directory:
@@ -162,6 +169,9 @@ Pause persists across logins. The storage guard pauses capture below 10 GiB and
 never deletes source data. Resume requires enough free space. A skipped locked
 or unchanged frame is normal. A successful phone import may still have stale
 source events; check `phone-quality-latest.json` as well as the import receipt.
+`status` distinguishes running services from loaded-but-stopped jobs. `resume`
+also starts a loaded worker that exited when free space was low; it does not
+interrupt already-running collectors.
 
 `daily_export.py` previews by default; `--write` creates a private JSONL export
 for a deliberate handoff. It does not upload. Correction labels and confirmed

@@ -32,6 +32,21 @@ def test_second_fallback_attempt_uses_larger_generation_budget():
     assert vision_fallback.generation_budget(1) == (2048, 300)
 
 
+def test_gated_attempt_is_preserved_in_history_without_loading_model(tmp_path, monkeypatch):
+    import json
+    monkeypatch.setattr(vision_fallback, 'RECEIPT', tmp_path/'latest.json')
+    monkeypatch.setattr(vision_fallback, 'HISTORY_DIR', tmp_path/'history')
+    monkeypatch.setattr(vision_fallback, 'resource_gate', lambda **_: 'battery_power')
+    def unexpected(*args, **kwargs):
+        raise AssertionError('Gated attempt must not load models')
+    monkeypatch.setattr(vision_fallback, 'verify_models', unexpected)
+    result = vision_fallback.run(date(2026,10,4), 20, mode='mixed')
+    assert result['stop_reason'] == 'battery_power' and result['completed'] == 0
+    history = list((tmp_path/'history').glob('*.json'))
+    assert len(history) == 1 and json.loads(history[0].read_text()) == result
+    assert history[0].stat().st_mode & 0o777 == 0o600
+
+
 def test_fallback_result_has_distinct_model_provenance_and_bounded_attempts(tmp_path, monkeypatch):
     monkeypatch.setattr(secure_store, "STATE_DIR", tmp_path)
     monkeypatch.setattr(secure_store, "DB_PATH", tmp_path / "ledger.sqlite3")

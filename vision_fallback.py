@@ -244,6 +244,18 @@ def save_description(path_text: str, timestamp: str, screenshot_sha: str,
         )
 
 
+def finish_receipt(receipt: dict, started: float) -> None:
+    receipt["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
+    receipt["elapsed_seconds"] = round(time.monotonic() - started, 1)
+    write_receipt(receipt, RECEIPT)
+    HISTORY_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(HISTORY_DIR, 0o700)
+    history = HISTORY_DIR / ("vision-fallback-" + receipt["started_at_utc"].replace(":", "-").replace("+", "_") + ".json")
+    if history.exists():
+        raise RuntimeError("Historical fallback receipt already exists")
+    write_receipt(receipt, history)
+
+
 def run(day: date, limit: int, *, mode: str = "hard", hard_limit: int | None = None) -> dict:
     started = time.monotonic()
     receipt = {"started_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -258,9 +270,7 @@ def run(day: date, limit: int, *, mode: str = "hard", hard_limit: int | None = N
     gate = resource_gate(benchmark_now=False)
     if gate or not in_overnight_window(datetime.now(timezone.utc)):
         receipt["stop_reason"] = gate or "outside_overnight_window"
-        receipt["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
-        receipt["elapsed_seconds"] = round(time.monotonic() - started, 1)
-        write_receipt(receipt, RECEIPT)
+        finish_receipt(receipt, started)
         return receipt
     models = verify_models(["9b_q8"])
     model = models["9b_q8"]
@@ -324,15 +334,7 @@ def run(day: date, limit: int, *, mode: str = "hard", hard_limit: int | None = N
             receipt[f"{lane}_completed"] += 1
         write_receipt(receipt, RECEIPT)
     receipt["stop_reason"] = receipt["stop_reason"] or "selected_images_processed"
-    receipt["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
-    receipt["elapsed_seconds"] = round(time.monotonic() - started, 1)
-    write_receipt(receipt, RECEIPT)
-    HISTORY_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(HISTORY_DIR, 0o700)
-    history = HISTORY_DIR / ("vision-fallback-" + receipt["started_at_utc"].replace(":", "-").replace("+", "_") + ".json")
-    if history.exists():
-        raise RuntimeError("Historical fallback receipt already exists")
-    write_receipt(receipt, history)
+    finish_receipt(receipt, started)
     return receipt
 
 
