@@ -30,6 +30,7 @@ STAGES = (
 COUNTS = {'selected', 'tagged', 'retained_total', 'processed_this_run', 'specific',
           'sensitive_skipped', 'eligible_titles', 'tagged_titles', 'specific_titles',
           'total_blocks', 'complete_blocks', 'attempted_this_run', 'completed_this_run',
+          'eligible_blocks', 'summary_evidence_blocks',
           'insufficient_context_blocks', 'reused', 'failed_this_run', 'propagated', 'days',
           'candidate_frames', 'clusters', 'supported_clusters', 'conflicting_clusters', 'propagated_count'}
 GOOD = {'complete', 'up_to_date', 'private_dashboard_written'}
@@ -46,7 +47,7 @@ def output_summaries(stdout: str) -> list[dict]:
         if not isinstance(value, dict):
             continue
         row = {}
-        for key in ('status', 'stop_reason', 'reason'):
+        for key in ('status', 'stop_reason', 'reason', 'summary_status'):
             item = value.get(key)
             if item is None or isinstance(item, str) and CODE.fullmatch(item):
                 if key in value:

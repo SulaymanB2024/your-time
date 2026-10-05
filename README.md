@@ -107,16 +107,31 @@ through 06:30. It calls the 9B worker through the legacy-named
 `secure_vision_fallback.zsh`; **9B is the primary pass** and does not require a
 2B caption. The 2B code is retained for manual comparison only. The removed
 27B test weights must not be redownloaded as part of routine setup.
+The scheduled launcher has no initial legacy-recovery reservation; eligible
+frames with an earlier incomplete 2B result enter the ordinary primary queue.
 
 Vision samples at most one OCR-complete frame per ten-second bucket, prioritizes
 the latest complete day and spreads first attempts across that day. Its
 2,000-frame ceiling is a safety bound, not a promised nightly quota. The 07:00
 cutoff and measured throughput determine actual coverage.
 
+Current-day candidates get at least nine slots before each older candidate
+while current work remains. Older retries share that historical lane; they do
+not run as an initial priority queue. Spare capacity can process history once
+current-day work is exhausted. This is a selection policy, not a guaranteed
+ratio of model time or successful descriptions.
+
 The final hour, 07:00–08:00, is reserved for text tagging and synthesis, with a
 07:30 retry. Shared locks prevent overlap between pipeline model processes.
 Text stage budgets are 20, 20 and 15 minutes, clipped to 08:00. There are no
 scheduled daytime LLM launches. Collection/OCR/dashboard updates continue.
+
+Chapter analysis covers different local hours and prioritizes longer observed
+blocks within each hour. It reserves one bounded call for a coherent summary
+of at most 20 completed chapters. A valid summary can describe a partial day;
+its support IDs, hashes and sampled seconds remain explicit. Its themes are
+withheld if their supporting evidence changes. Matching chapter caches survive
+summary-prompt updates, and a failed summary does not discard completed chapters.
 
 Inference requires AC power, at least 10.5 GiB free, at least 20% free memory,
 and acceptable system load. Workers recheck gates and deadlines between items,
@@ -140,6 +155,11 @@ immutable historical receipt. `text-nightly-latest-receipt.json` and
 elapsed time. A failed stage does not suppress the later stages or dashboard
 refresh. Exit zero with a resource gate is not described as completed analysis.
 The three scheduled text-stage argument lists are validated by regression tests.
+
+The capture LaunchAgents also have five-minute start triggers, allowing an
+existing loaded collector to retry after a successful low-storage stop.
+Storage guards still apply on every retry. An explicit capture pause unloads
+these jobs and disables their triggers until resumed.
 
 ## Setup checks and controls
 

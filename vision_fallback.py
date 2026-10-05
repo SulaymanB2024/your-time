@@ -118,9 +118,9 @@ def select_direct(day: date, source_sha: str, fallback_sha: str, limit: int) -> 
                      (source_sha, fallback_sha, start.isoformat(), end.isoformat()))}
     rows = []
     for path, timestamp, app, window, ocr in candidates:
-        # The 2B pass owns its own incomplete and sensitive cases. A 9B
-        # failure may be retried once with a larger generation budget.
-        if (path, source_sha) in prior:
+        # Existing completed 2B rows enter quality upgrades. Sensitive rows
+        # remain excluded; other eligible frames belong to the primary 9B queue.
+        if prior.get((path, source_sha), (None, 0))[0] in {"complete", "sensitive_skipped"}:
             continue
         status, attempts = prior.get((path, fallback_sha), (None, 0))
         if status in {"complete", "sensitive_skipped"} or attempts >= 2:
@@ -167,15 +167,20 @@ def select_backfill(day: date, source_sha: str, model_sha: str, limit: int) -> l
 
 def with_backfill(current: list[tuple[str, tuple]], backlog: list[tuple],
                   limit: int) -> list[tuple[str, tuple]]:
-    """Spend about one fifth of available slots on historical gaps."""
-    current, backlog = deque(current), deque(backlog)
+    return with_history(current, [("backfill", row) for row in backlog], limit)
+
+
+def with_history(current: list[tuple[str, tuple]], history: list[tuple[str, tuple]],
+                 limit: int) -> list[tuple[str, tuple]]:
+    """Reserve at most one in ten prefix slots for older work while current remains."""
+    current, history = deque(current), deque(history)
     result = []
-    while len(result) < limit and (current or backlog):
-        for _ in range(4):
+    while len(result) < limit and (current or history):
+        for _ in range(9):
             if current and len(result) < limit:
                 result.append(current.popleft())
-        if backlog and len(result) < limit:
-            result.append(("backfill", backlog.popleft()))
+        if history and len(result) < limit:
+            result.append(history.popleft())
     return result
 
 
@@ -260,6 +265,7 @@ def run(day: date, limit: int, *, mode: str = "hard", hard_limit: int | None = N
     started = time.monotonic()
     receipt = {"started_at_utc": datetime.now(timezone.utc).isoformat(),
                "day_local": day.isoformat(), "max_images": limit,
+               "selection_policy": "current_day_9_to_history_1" if mode == "mixed" else "hard_only",
                "selected": 0, "hard_selected": 0, "retry_selected": 0,
                "direct_selected": 0, "backfill_selected": 0,
                "quality_selected": 0, "hard_completed": 0,
@@ -280,7 +286,7 @@ def run(day: date, limit: int, *, mode: str = "hard", hard_limit: int | None = N
     retry_rows = (select_prior_retries(day, model["weights_sha256"],
                                       min(15, limit - len(hard_rows)))
                   if mode == "mixed" else [])
-    remaining = limit - len(hard_rows) - len(retry_rows)
+    remaining = limit - len(hard_rows)
     direct_rows = (select_direct(day, source_sha, model["weights_sha256"], remaining)
                    if mode == "mixed" else [])
     quality_rows = (select_quality(day, source_sha, model["weights_sha256"], remaining)
@@ -290,8 +296,8 @@ def run(day: date, limit: int, *, mode: str = "hard", hard_limit: int | None = N
     reserved_paths = {row[0] for row in hard_rows + retry_rows}
     backlog = [row for row in backlog if row[0] not in reserved_paths]
     current = interleave_new_and_upgrades(direct_rows, quality_rows, remaining)
-    rows = [("hard", row) for row in hard_rows] + [("retry", row) for row in retry_rows] + with_backfill(
-        current, backlog, remaining)
+    history = [("retry", row) for row in retry_rows] + [("backfill", row) for row in backlog]
+    rows = [("hard", row) for row in hard_rows] + with_history(current, history, remaining)
     receipt["selected"] = len(rows)
     for lane, _ in rows:
         receipt[f"{lane}_selected"] += 1

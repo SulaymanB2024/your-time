@@ -150,3 +150,49 @@ def test_stale_synthesis_is_hidden_when_source_evidence_changes(monkeypatch):
     assert item["themes"] == []
     assert item["synthesis_status"] == "stale_evidence"
     assert item["data_quality"]["status"] == "passed"
+
+
+def test_partial_summary_uses_current_support_and_stays_explicitly_partial(monkeypatch):
+    from test_data_quality import valid_report
+    from local_synthesis import block_projection, fingerprint, summary_fingerprint, DAY_PROMPT_VERSION
+    analysis = valid_report()
+    analysis.update(day_local="2026-10-03", complete_day=True)
+    analysis["visual"].update(new_capture_ocr_pending=0, vision_status_counts={})
+    analysis["mac"]["gaps_over_one_minute"] = []
+    block = {"id": "supported", "app": "Editor", "start_utc": analysis["start_utc"],
+             "end_utc": analysis["mac"]["segments"][0]["end_utc"], "sampled_seconds": 5,
+             "top_windows": [], "distinct_window_count": 0, "screenshot_count": 0, "visual_evidence": []}
+    pending = dict(block, id="pending")
+    row = {"block_id": block["id"], "status": "complete", "input_sha256": fingerprint(block_projection(block)),
+           "result": {"activity_kind": "writing", "focus_label": "Drafting"}}
+    synthesis = {"status": "partial", "blocks": [row], "summary_status": "complete",
+        "day_prompt_version": DAY_PROMPT_VERSION, "day_input_sha256": summary_fingerprint([row]),
+        "summary_evidence_ids": ["supported"], "summary_scope": "selected_observed_chapters",
+        "themes": [{"label": "Writing", "summary": "Drafting appears in the selected chapter",
+                    "evidence_ids": ["supported"]}], "candidate_outcomes": []}
+    monkeypatch.setattr(local_dashboard, "analyze", lambda *_args, **_kwargs: analysis)
+    monkeypatch.setattr(local_dashboard, "focus_build", lambda *_args, **_kwargs: {"blocks": [block, pending]})
+    monkeypatch.setattr(local_dashboard, "read_json", lambda path: synthesis if path.name.startswith("synthesis-") else {})
+    monkeypatch.setattr(local_dashboard, "read_supported_tags", lambda _: [])
+    monkeypatch.setattr(local_dashboard, "correction_summary", lambda *_: [])
+    monkeypatch.setattr(local_dashboard, "correction_review", lambda *_: [])
+    monkeypatch.setattr(local_dashboard, "active_outcomes", lambda *_: [])
+    monkeypatch.setattr(local_dashboard, "calendar_summary", lambda *_: {})
+    monkeypatch.setattr(local_dashboard, "work_artifacts", lambda *_: {})
+    item = local_dashboard.daily_snapshot(datetime(2026, 10, 3).date(), datetime(2026, 10, 4, tzinfo=timezone.utc))
+    assert item["synthesis_status"] == "partial"
+    assert item["themes"] == synthesis["themes"] and item["summary_evidence_blocks"] == 1
+    assert item["summary_scope"] == "selected_observed_chapters"
+    assert item["verified_accomplishments"] == []
+    synthesis["status"] = "complete"
+    synthesis["blocks"].append({"block_id": "pending", "status": "insufficient_context",
+        "input_sha256": fingerprint(block_projection(pending))})
+    synthesis["day_input_sha256"] = "invalid-summary-fingerprint"
+    corrupt = local_dashboard.daily_snapshot(datetime(2026, 10, 3).date(), datetime(2026, 10, 4, tzinfo=timezone.utc))
+    assert corrupt["themes"] == []
+    synthesis["status"] = "partial"
+    synthesis["day_input_sha256"] = summary_fingerprint([row])
+    synthesis["blocks"].pop()
+    block["top_windows"] = [{"title": "Changed context", "sampled_seconds": 5}]
+    changed = local_dashboard.daily_snapshot(datetime(2026, 10, 3).date(), datetime(2026, 10, 4, tzinfo=timezone.utc))
+    assert changed["themes"] == [] and changed["synthesis_status"] == "stale_evidence"

@@ -203,3 +203,124 @@ def test_resource_stop_preserves_later_cached_results(tmp_path, monkeypatch):
     assert result["stop_reason"] == "local_model_busy"
     assert result["failed_this_run"] == result["attempted_this_run"] == 0
     assert result["reused"] == 1
+
+
+def write_focus(tmp_path, blocks):
+    payload = json.dumps({"blocks": blocks}).encode()
+    (tmp_path / "focus-2026-10-03.json").write_bytes(payload)
+    (tmp_path / "focus-2026-10-03.manifest.json").write_text(json.dumps({
+        "sha256": __import__("hashlib").sha256(payload).hexdigest()}))
+
+
+def sample_block(identity, hour, seconds=120):
+    return {"id": identity, "start_utc": f"2026-10-03T{hour:02d}:00:00+00:00",
+            "end_utc": f"2026-10-03T{hour:02d}:10:00+00:00", "sampled_seconds": seconds,
+            "app": "Editor", "top_windows": [], "visual_evidence": [], "screenshot_count": 0}
+
+
+def test_partial_day_gets_a_cited_summary_before_deadline(tmp_path, monkeypatch):
+    monkeypatch.setattr(local_synthesis, "ANALYSIS_DIR", tmp_path)
+    monkeypatch.setattr(local_synthesis, "resource_gate", lambda **_: None)
+    blocks = [sample_block("morning", 12, 120), sample_block("afternoon", 18, 600),
+              sample_block("evening", 23, 240)]
+    write_focus(tmp_path, blocks)
+    clock = {"now": 100}
+    monkeypatch.setattr(local_synthesis.time, "monotonic", lambda: clock["now"])
+    calls = []
+    def fake_call(model, prompt, schema):
+        clock["now"] += 110
+        if "focus_label" in schema["properties"]:
+            identity = schema["properties"]["evidence_ids"]["items"]["enum"][0]
+            calls.append(identity)
+            return ({"focus_label": "Drafting", "activity_kind": "writing",
+                     "observed_work": "A draft is visible", "candidate_progress": "",
+                     "evidence_ids": [identity], "uncertainty": ""}, 110)
+        calls.append("summary")
+        ids = schema["properties"]["themes"]["items"]["properties"]["evidence_ids"]["items"]["enum"]
+        return ({"themes": [{"label": "Writing", "summary": "Drafting appears in selected chapters",
+                             "evidence_ids": ids}], "candidate_outcomes": [], "uncertainty": "Subset"}, 110)
+    monkeypatch.setattr(local_synthesis, "model_call", fake_call)
+    result = local_synthesis.run_day(date(2026, 10, 3), tmp_path / "fake", "sha", deadline=700)
+    saved = json.loads((tmp_path / "synthesis-2026-10-03.json").read_text())
+    assert result["status"] == "partial" and result["summary_status"] == "complete"
+    assert calls == ["afternoon", "morning", "summary"]
+    assert clock["now"] <= 700 and result["stop_reason"] == "summary_budget_reserved"
+    assert result["complete_seconds"] == result["summary_evidence_seconds"] == 720
+    assert result["sampled_seconds"] == 960 and saved["verified_accomplishments"] == []
+    current = {block["id"]: local_synthesis.fingerprint(local_synthesis.block_projection(block)) for block in blocks}
+    assert local_synthesis.summary_is_current(saved, current)
+    current["morning"] = "changed"
+    assert not local_synthesis.summary_is_current(saved, current)
+    monkeypatch.setattr(local_synthesis, "resource_gate", lambda **_: "battery_power")
+    calls.clear()
+    reused = local_synthesis.run_day(date(2026, 10, 3), tmp_path / "fake", "sha", deadline=1000)
+    assert not calls and reused["summary_status"] == "complete" and reused["status"] == "partial"
+
+
+def test_chapter_selection_covers_hours_and_prioritizes_duration():
+    blocks = [sample_block(f"early-{i}", 12, 60 + i) for i in range(20)]
+    blocks += [sample_block("midday", 18, 300), sample_block("late", 23, 200)]
+    ordered = local_synthesis.prioritize_blocks(blocks)
+    assert {block["id"] for block in ordered[:3]} == {"early-19", "midday", "late"}
+    assert len({block["id"] for block in ordered}) == len(blocks)
+
+
+def test_failed_summary_refresh_preserves_previous_valid_partial_summary(tmp_path, monkeypatch):
+    monkeypatch.setattr(local_synthesis, "ANALYSIS_DIR", tmp_path)
+    monkeypatch.setattr(local_synthesis, "resource_gate", lambda **_: None)
+    blocks = [sample_block("morning", 12, 120), sample_block("afternoon", 18, 600),
+              sample_block("evening", 23, 240)]
+    write_focus(tmp_path, blocks)
+    fail_summary = {"enabled": False}
+    def fake_call(model, prompt, schema):
+        if "focus_label" in schema["properties"]:
+            identity = schema["properties"]["evidence_ids"]["items"]["enum"][0]
+            return ({"focus_label": "Drafting", "activity_kind": "writing",
+                     "observed_work": "Draft visible", "candidate_progress": "",
+                     "evidence_ids": [identity], "uncertainty": ""}, 1)
+        if fail_summary["enabled"]:
+            raise RuntimeError("synthetic summary failure")
+        ids = schema["properties"]["themes"]["items"]["properties"]["evidence_ids"]["items"]["enum"]
+        return ({"themes": [{"label": "Writing", "summary": "Drafting appears in a selected chapter",
+                             "evidence_ids": ids}], "candidate_outcomes": [], "uncertainty": ""}, 1)
+    monkeypatch.setattr(local_synthesis, "model_call", fake_call)
+    path = tmp_path / "synthesis-2026-10-03.json"
+    local_synthesis.run_day(date(2026, 10, 3), tmp_path / "fake", "sha", deadline=time.monotonic()+1000, limit=1)
+    first = json.loads(path.read_text())
+    fail_summary["enabled"] = True
+    result = local_synthesis.run_day(date(2026, 10, 3), tmp_path / "fake", "sha", deadline=time.monotonic()+1000, limit=1)
+    second = json.loads(path.read_text())
+    assert result["complete_blocks"] == 2 and result["status"] == "partial"
+    assert second["themes"] == first["themes"] and second["summary_evidence_ids"] == first["summary_evidence_ids"]
+    assert result["summary_evidence_blocks"] == 1 and second["summary_refresh_status"] == "failed"
+    current = {block["id"]: local_synthesis.fingerprint(local_synthesis.block_projection(block)) for block in blocks}
+    assert local_synthesis.summary_is_current(second, current)
+
+
+def test_summary_has_bounded_input_without_invalidating_cached_chapters(tmp_path, monkeypatch):
+    monkeypatch.setattr(local_synthesis, "ANALYSIS_DIR", tmp_path)
+    monkeypatch.setattr(local_synthesis, "resource_gate", lambda **_: None)
+    blocks = [sample_block(f"block-{i}", 12 + i % 12, 120 + i) for i in range(45)]
+    write_focus(tmp_path, blocks)
+    cached = [{"block_id": block["id"], "sampled_seconds": block["sampled_seconds"],
+        "input_sha256": local_synthesis.fingerprint(local_synthesis.block_projection(block)),
+        "model_sha256": "sha", "prompt_version": local_synthesis.PROMPT_VERSION,
+        "status": "complete", "result": {"focus_label": "Draft", "activity_kind": "writing"}}
+        for block in blocks]
+    (tmp_path / "synthesis-2026-10-03.json").write_text(json.dumps({"blocks": cached}))
+    calls = []
+    def fake_call(model, prompt, schema):
+        assert "focus_label" not in schema["properties"]
+        ids = schema["properties"]["themes"]["items"]["properties"]["evidence_ids"]["items"]["enum"]
+        calls.append(ids)
+        return ({"themes": [], "candidate_outcomes": [], "uncertainty": ""}, 1)
+    monkeypatch.setattr(local_synthesis, "model_call", fake_call)
+    result = local_synthesis.run_day(date(2026, 10, 3), tmp_path / "fake", "sha", deadline=time.monotonic() + 1000)
+    assert result["status"] == "complete" and result["reused"] == 45
+    assert result["summary_evidence_blocks"] == len(calls[0]) == 20 and len(calls) == 1
+    assert result["summary_evidence_seconds"] < result["complete_seconds"]
+    assert not local_synthesis.needs_synthesis(date(2026, 10, 3), "sha")
+    saved = json.loads((tmp_path / "synthesis-2026-10-03.json").read_text())
+    saved["day_input_sha256"] = "corrupt"
+    (tmp_path / "synthesis-2026-10-03.json").write_text(json.dumps(saved))
+    assert local_synthesis.needs_synthesis(date(2026, 10, 3), "sha")

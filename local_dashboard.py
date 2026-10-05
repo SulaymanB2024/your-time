@@ -22,7 +22,7 @@ from chronicle_rollup import (DAYS, MONTHS, YEARS, local_boundaries,
                               read_json as read_rollup, refresh as refresh_chronicle,
                               work_artifacts, calendar_summary)
 from screen_context_tagging import allocate_visible_context, read_supported_tags
-from local_synthesis import block_projection, fingerprint
+from local_synthesis import block_projection, fingerprint, summary_is_current
 from task_corrections import (active_outcomes, summary as correction_summary,
                               review as correction_review)
 from window_topic_tagging import window_id
@@ -302,6 +302,19 @@ def daily_snapshot(day, now: datetime) -> dict:
     synthesis_current = (set(current_inputs) == {row.get("block_id") for row in synthesis.get("blocks", [])}
         and all(row.get("input_sha256") == current_inputs.get(row.get("block_id"))
                 for row in synthesis.get("blocks", [])))
+    summary_current = summary_is_current(synthesis, current_inputs)
+    summary_usable = summary_current or ("summary_status" not in synthesis
+        and synthesis.get("status") == "complete" and synthesis_current)
+    synthesis_coverage = dict(synthesis.get("coverage", {}))
+    if synthesis:
+        synthesis_coverage.update(total_blocks=len(focus["blocks"]), complete_blocks=len(inferred),
+            sampled_seconds=round(sum(block["sampled_seconds"] for block in focus["blocks"]), 1),
+            complete_seconds=round(sum(block["sampled_seconds"] for block in focus["blocks"]
+                                       if block["id"] in inferred), 1))
+        supported_ids = set(synthesis.get("summary_evidence_ids", [])) if summary_current else set()
+        synthesis_coverage.update(summary_evidence_blocks=len(supported_ids),
+            summary_evidence_seconds=round(sum(block["sampled_seconds"] for block in focus["blocks"]
+                                               if block["id"] in supported_ids), 1))
     blocks = []
     categories = Counter()
     for block in focus["blocks"]:
@@ -367,11 +380,14 @@ def daily_snapshot(day, now: datetime) -> dict:
         "screen_similarity_matches": len(screen_similarity.get("propagated", [])),
         "workstream_status": window_topics.get("status", "not_run"),
         "blocks": blocks,
-        "synthesis_status": (synthesis.get("status", "not_run") if synthesis_current or not synthesis
+        "synthesis_status": ("partial" if summary_current and not synthesis_current else
+                             synthesis.get("status", "not_run") if synthesis_current or not synthesis
                              else "stale_evidence"),
-        "synthesis_coverage": synthesis.get("coverage", {}),
-        "themes": synthesis.get("themes", []) if synthesis.get("status") == "complete" and synthesis_current else [],
-        "candidate_outcomes": synthesis.get("candidate_outcomes", []) if synthesis.get("status") == "complete" and synthesis_current else [],
+        "synthesis_coverage": synthesis_coverage,
+        "summary_scope": synthesis.get("summary_scope") if summary_current else None,
+        "summary_evidence_blocks": len(synthesis.get("summary_evidence_ids", [])) if summary_current else 0,
+        "themes": synthesis.get("themes", []) if summary_usable else [],
+        "candidate_outcomes": synthesis.get("candidate_outcomes", []) if summary_usable else [],
         "verified_accomplishments": [],
     }
 

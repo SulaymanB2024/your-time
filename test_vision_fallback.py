@@ -109,7 +109,7 @@ def test_direct_9b_uses_uncovered_frames_and_retries_once(tmp_path, monkeypatch)
     monkeypatch.setattr(secure_store, "DB_PATH", tmp_path / "ledger.sqlite3")
     at = datetime(2026, 9, 28, 20, tzinfo=timezone.utc)
     with secure_store.connect() as database:
-        for index in range(5):
+        for index in range(6):
             timestamp = at.replace(minute=index).isoformat()
             path = f"/private/direct-{index}.webp"
             database.execute("INSERT INTO screenshots VALUES (?,?,?,?,?,?,?,?)",
@@ -119,7 +119,8 @@ def test_direct_9b_uses_uncovered_frames_and_retries_once(tmp_path, monkeypatch)
                 (1, "2b", "complete", 1),
                 (2, "9b", "complete", 1),
                 (3, "9b", "incomplete", 1),
-                (4, "9b", "incomplete", 2)):
+                (4, "9b", "incomplete", 2),
+                (5, "2b", "incomplete", 1)):
             timestamp = at.replace(minute=index).isoformat()
             database.execute("INSERT INTO vision_descriptions VALUES (?,?,?,?,?,?,?,?,?,?)",
                              (f"/private/direct-{index}.webp", model,
@@ -127,7 +128,8 @@ def test_direct_9b_uses_uncovered_frames_and_retries_once(tmp_path, monkeypatch)
                               "hash", timestamp, None, status, attempts, 1.0, timestamp))
     rows = vision_fallback.select_direct(date(2026, 9, 28), "2b", "9b", 20)
     assert {row[0]: row[5] for row in rows} == {
-        "/private/direct-0.webp": 0, "/private/direct-3.webp": 1}
+        "/private/direct-0.webp": 0, "/private/direct-3.webp": 1,
+        "/private/direct-5.webp": 0}
     assert all(row[6] is None for row in rows)
 
 
@@ -157,7 +159,24 @@ def test_backfill_has_bounded_share_and_retains_yesterday_priority():
     current = [("direct", (i,)) for i in range(10)]
     backlog = [(f"past-{i}",) for i in range(10)]
     chosen = vision_fallback.with_backfill(current, backlog, 10)
-    assert [lane for lane, _ in chosen] == ["direct"] * 4 + ["backfill"] + ["direct"] * 4 + ["backfill"]
+    assert [lane for lane, _ in chosen] == ["direct"] * 9 + ["backfill"]
+
+
+def test_prior_retries_cannot_displace_a_short_current_day_run():
+    current = [("direct", (i,)) for i in range(30)]
+    history = [("retry", (f"retry-{i}",)) for i in range(15)]
+    chosen = vision_fallback.with_history(current, history, 25)
+    for prefix in range(1, len(chosen) + 1):
+        assert sum(lane == "retry" for lane, _ in chosen[:prefix]) <= prefix // 10
+    assert chosen[0] == current[0]
+    assert len({row[0] for _, row in chosen}) == 25
+
+
+def test_history_uses_spare_capacity_when_current_day_is_finished():
+    chosen = vision_fallback.with_history([("direct", ("today",))],
+        [("retry", ("older-retry",)), ("backfill", ("older-new",))], 20)
+    assert chosen == [("direct", ("today",)), ("retry", ("older-retry",)),
+                      ("backfill", ("older-new",))]
 
 
 def test_backfill_covers_old_unseen_days_and_ignores_completed(tmp_path, monkeypatch):

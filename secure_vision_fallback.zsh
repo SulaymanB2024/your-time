@@ -2,7 +2,7 @@
 set -eu
 umask 077
 
-# Bounded local 9B recovery for 2B-incomplete frames; no HTTP listener.
+# Primary local 9B analysis, bounded by the overnight window; no HTTP listener.
 exec /usr/bin/env -i \
   HOME=/Users/sulaymanbowles \
   PATH=/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin \
