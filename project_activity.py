@@ -1,0 +1,187 @@
+"""Collect local Git artifact receipts from explicitly approved project roots."""
+
+from __future__ import annotations
+
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+import subprocess
+import tempfile
+import time
+from collections import Counter
+from datetime import datetime, timezone
+from pathlib import Path
+
+from secure_store import STATE_DIR, connect, prepare_private_dir
+
+APPROVED_ROOTS = (Path.home() / "Projects", Path.home() / "Projects/CodexWork")
+SCAN_ROOT = Path.home() / "Projects"  # CodexWork is inside this root.
+STORAGE_NAV = Path.home() / ".local/bin/storage-nav"
+STATUS_PATH = STATE_DIR / "project-git-latest-receipt.json"
+LOCK_PATH = STATE_DIR / "project-git-scan.lock"
+SKIP_DIRS = frozenset({".git", "node_modules", ".venv", "venv", "dist", "build", ".next",
+                       ".cache", "vendor", "coverage", "__pycache__", "data"})
+MAX_DEPTH = 4
+
+
+def discover_repositories(root: Path = SCAN_ROOT) -> list[Path]:
+    found = []
+    for dirname, dirs, files in os.walk(root, followlinks=False):
+        here = Path(dirname)
+        depth = len(here.relative_to(root).parts)
+        if ".git" in dirs or ".git" in files:
+            found.append(here)
+        dirs[:] = [item for item in dirs if item not in SKIP_DIRS
+                   and not (here / item).is_symlink() and depth < MAX_DEPTH]
+    return sorted(set(found))
+
+
+def resolve_repo(path: Path) -> tuple[str, str] | None:
+    result = subprocess.run([str(STORAGE_NAV), "resolve", str(path)],
+                            capture_output=True, text=True, timeout=20, check=False)
+    if result.returncode:
+        return None
+    fields = dict(line.split("\t", 1) for line in result.stdout.splitlines() if "\t" in line)
+    top, common = fields.get("git_top_level"), fields.get("git_common_dir")
+    if not top or top == "-" or not common or common == "-":
+        return None
+    resolved = Path(top).resolve()
+    if not any(resolved.is_relative_to(root.resolve()) for root in APPROVED_ROOTS):
+        return None
+    return str(resolved), common
+
+
+def local_git_emails(path: str) -> set[str]:
+    emails = set()
+    for args in (["/usr/bin/git", "-C", path, "config", "--get", "user.email"],
+                 ["/usr/bin/git", "config", "--global", "--get", "user.email"]):
+        result = subprocess.run(args, capture_output=True, text=True, timeout=5, check=False)
+        if result.returncode == 0 and "@" in result.stdout:
+            emails.add(result.stdout.strip().casefold())
+    return emails
+
+
+def git_commits(path: str, since_days: int, limit: int = 500) -> list[tuple[str, str]]:
+    emails = local_git_emails(path)
+    if not emails:
+        return []
+    args = ["/usr/bin/git", "-C", path, "--no-pager", "log", "--all",
+            f"--since={since_days} days ago", f"-n{limit}",
+            "--format=%H%x09%cI%x09%ae%x09%ce"]
+    result = subprocess.run(args, capture_output=True, text=True, timeout=30,
+                            check=False, env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+                                              "GIT_TERMINAL_PROMPT": "0",
+                                              "GIT_OPTIONAL_LOCKS": "0"})
+    if result.returncode:
+        head = subprocess.run(["/usr/bin/git", "-C", path, "rev-parse", "--verify", "HEAD"],
+                              capture_output=True, timeout=5, check=False)
+        if head.returncode:
+            return []
+        raise RuntimeError("git_log_failed")
+    rows = []
+    for line in result.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 4 or len(parts[0]) not in {40, 64}:
+            continue
+        if not (parts[2].casefold() in emails or parts[3].casefold() in emails):
+            continue
+        try:
+            committed = datetime.fromisoformat(parts[1]).astimezone(timezone.utc).isoformat()
+        except ValueError:
+            continue
+        rows.append((parts[0], committed))
+    return rows
+
+
+def write_receipt(value: dict) -> None:
+    prepare_private_dir()
+    fd, temporary = tempfile.mkstemp(prefix=".git-receipt-", dir=STATE_DIR)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as output:
+            json.dump({"checked_at_utc": datetime.now(timezone.utc).isoformat(), **value},
+                      output, sort_keys=True)
+            output.write("\n")
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, STATUS_PATH)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def run(*, since_days: int = 365, limit_repos: int | None = None) -> dict:
+    if not 1 <= since_days <= 3650:
+        raise ValueError("since_days must be 1-3650")
+    candidates = discover_repositories()
+    if limit_repos is not None:
+        candidates = candidates[:limit_repos]
+    started = time.monotonic()
+    resolved = scanned = inserted = errors = 0
+    error_counts = Counter()
+    seen_common = set()
+    for candidate in candidates:
+        try:
+            identity = resolve_repo(candidate)
+            if not identity:
+                continue
+            repo_path, common_dir = identity
+            resolved += 1
+            # Shared branches and linked worktrees may point to one Git store.
+            common_key = hashlib.sha256(common_dir.encode()).hexdigest()[:20]
+            if common_key in seen_common:
+                continue
+            seen_common.add(common_key)
+            commits = git_commits(repo_path, since_days)
+            scanned += 1
+            now = datetime.now(timezone.utc).isoformat()
+            with connect() as database:
+                for sha, committed in commits:
+                    identity = hashlib.sha256((common_key + sha).encode()).hexdigest()
+                    cursor = database.execute(
+                        "INSERT OR IGNORE INTO git_receipts VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (identity, common_key, repo_path, sha, committed, now, "local_commit"),
+                    )
+                    inserted += cursor.rowcount
+        except subprocess.TimeoutExpired:
+            errors += 1
+            error_counts["timeout"] += 1
+        except RuntimeError:
+            errors += 1
+            error_counts["git_log_failed"] += 1
+        except (OSError, subprocess.SubprocessError, ValueError):
+            errors += 1
+            error_counts["other"] += 1
+    result = {"status": "complete" if not errors else "partial",
+              "candidate_repositories": len(candidates), "resolved": resolved,
+              "git_stores_scanned": scanned, "new_commit_receipts": inserted,
+              "errors": errors, "elapsed_seconds": round(time.monotonic() - started, 2),
+              "error_counts": dict(error_counts),
+              "since_days": since_days,
+              "interpretation": "Local commits are artifacts, not proof of deployment or acceptance."}
+    write_receipt(result)
+    return result
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--since-days", type=int, default=365)
+    parser.add_argument("--limit-repos", type=int)
+    args = parser.parse_args()
+    os.umask(0o077)
+    prepare_private_dir()
+    fd = os.open(LOCK_PATH, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print(json.dumps({"status": "another_git_scan_is_running"}))
+            return
+        print(json.dumps(run(since_days=args.since_days, limit_repos=args.limit_repos), sort_keys=True))
+    finally:
+        os.close(fd)
+
+
+if __name__ == "__main__":
+    main()

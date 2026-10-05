@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "Your Time — local browser activity",
+  "version": "1.0.0",
+  "description": "Records active browser-tab context in the private local activity ledger.",
+  "permissions": ["tabs", "nativeMessaging"],
+  "incognito": "not_allowed",
+  "background": {"service_worker": "background.js"},
+  "action": {"default_title": "Review Your Time", "default_popup": "popup.html"}
+}

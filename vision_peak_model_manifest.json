@@ -1,0 +1,18 @@
+{
+  "repository": "unsloth/Qwen3.5-27B-GGUF",
+  "revision": "3221f178a6b842d04f1fb42f1c413534adcc0a6a",
+  "upstream_model": "Qwen/Qwen3.5-27B",
+  "purpose": "single-image peak-quality feasibility test, not scheduled inference",
+  "files": [
+    {
+      "name": "Qwen3.5-27B-Q3_K_M.gguf",
+      "size": 13505116064,
+      "sha256": "f08ce37ebe8a7130db0c198262336773976b1e374f2444f898c41117710f0bb3"
+    },
+    {
+      "name": "mmproj-F16.gguf",
+      "size": 927607040,
+      "sha256": "458bc46d8f275866fde5d88c9c554d9d462a6e8e3a028090d9850e17ab6a1217"
+    }
+  ]
+}

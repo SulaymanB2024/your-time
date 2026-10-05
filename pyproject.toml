@@ -1,0 +1,15 @@
+[project]
+name = "personal-activity-ledger"
+version = "0.1.0"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+  "mss==10.2.0",
+  "pillow==12.3.0",
+  "ocrmac==1.0.1",
+  "pyobjc-framework-Cocoa==12.2.2",
+  "pyobjc-framework-Quartz==12.2.2",
+  "watchdog==6.0.0",
+]
+
+[dependency-groups]
+dev = ["pytest==8.4.2"]
