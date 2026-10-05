@@ -113,14 +113,22 @@ def validate_push(repo: Path, remote: str, records: str) -> None:
         raise RuntimeError('Push blocked: commit contains excluded data or notes')
 
 
+def verify_repository() -> None:
+    result = subprocess.run(['gh', 'repo', 'view', REPOSITORY, '--json', 'isPrivate,nameWithOwner'],
+                            capture_output=True, text=True, timeout=30)
+    try:
+        metadata = json.loads(result.stdout) if not result.returncode else None
+    except ValueError:
+        metadata = None
+    if metadata != {'isPrivate': False, 'nameWithOwner': REPOSITORY}:
+        raise RuntimeError('Approved public repository identity could not be verified')
+
+
 def push_source(repo: Path, tree: str) -> str:
     origin = git(repo, 'remote', 'get-url', 'origin').decode().strip()
     if origin != REMOTE:
         raise RuntimeError('Origin is not the approved Your Time repository')
-    result = subprocess.run(['gh', 'repo', 'view', REPOSITORY, '--json', 'isPrivate,nameWithOwner'],
-                            capture_output=True, text=True, timeout=30)
-    if result.returncode or json.loads(result.stdout) != {'isPrivate': True, 'nameWithOwner': REPOSITORY}:
-        raise RuntimeError('Private repository identity could not be verified')
+    verify_repository()
     heads = git(repo, 'ls-remote', '--heads', 'origin', 'refs/heads/main').split()
     parent = heads[0].decode() if heads else None
     local = git(repo, 'for-each-ref', '--format=%(objectname)', SOURCE_REF).decode().strip()
@@ -142,7 +150,7 @@ def push_source(repo: Path, tree: str) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--push', action='store_true', help='Explicitly publish to the approved private repository')
+    parser.add_argument('--push', action='store_true', help='Explicitly publish to the approved public source repository')
     parser.add_argument('--check-push', metavar='REMOTE_URL', help=argparse.SUPPRESS)
     args = parser.parse_args()
     repo = Path(__file__).resolve().parent

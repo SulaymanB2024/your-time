@@ -86,7 +86,7 @@ web services must not be restarted for routine review.
 
 ## Source publication boundary
 
-The private GitHub repository receives only an intentional source export.
+The public GitHub repository receives only an intentional source export.
 Generated HTML, database files, images, OCR, captions, model weights, runtime
 receipts and private review documents remain local. The initial source commit
 has no ancestry from the local historical working branch; subsequent exports

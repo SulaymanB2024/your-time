@@ -18,7 +18,7 @@ the scan explicitly partial; they are not a claim of complete project history.
 
 This is the installed configuration for one Apple Silicon Mac. It runs locally,
 without a web server, cloud inference, automatic uploads or paid services.
-The private source repository contains no recorded activity or model weights.
+The public source repository contains no recorded activity or model weights.
 
 ## What runs
 
@@ -204,6 +204,6 @@ outcomes are stored separately through `task_corrections.py`.
 ```
 
 Tests use synthetic fixtures; live setup checks verify this installation.
-For source-only updates to the private GitHub repository, use
+For source-only updates to the public GitHub repository, use
 [publish_source.py](publish_source.py) as described in [GITHUB.md](GITHUB.md).
 Do not push the local historical working branch directly.

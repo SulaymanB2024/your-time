@@ -1,4 +1,5 @@
 import subprocess
+import json
 
 import pytest
 
@@ -9,7 +10,7 @@ from publish_source import (REMOTE, SOURCE_REF, allowed, git, source_commit,
 @pytest.mark.parametrize('path', [
     '.env', 'activity.sqlite3', 'model.gguf', 'capture.png', 'analyses/day.json',
     'vision-latest-receipt.json', 'PERFORMANCE_REVIEW_2026-10-04.md',
-    'VISION_QUALITY_TEST.md', 'unknown.json', '../secret.py', '/root.py',
+    'VISION_QUALITY_TEST.md', 'CHRONICLE_PLAN.md', 'unknown.json', '../secret.py', '/root.py',
 ])
 def test_runtime_data_and_private_notes_are_excluded(path):
     assert not allowed(path)
@@ -90,3 +91,24 @@ def test_push_guard_rejects_private_ancestry_and_extra_refs(tmp_path):
     validate_push(repo, REMOTE, record(second, old=clean))
     with pytest.raises(RuntimeError, match='descended solely'):
         validate_push(repo, REMOTE, record(working, old=clean))
+
+
+@pytest.mark.parametrize('metadata', [
+    {'isPrivate': True, 'nameWithOwner': 'SulaymanB2024/your-time'},
+    {'isPrivate': False, 'nameWithOwner': 'different-owner/your-time'},
+    {},
+])
+def test_publisher_rejects_unapproved_visibility_or_owner(monkeypatch, metadata):
+    import publish_source
+    monkeypatch.setattr(publish_source.subprocess, 'run', lambda *args, **kwargs:
+        subprocess.CompletedProcess(args, 0, json.dumps(metadata), ''))
+    with pytest.raises(RuntimeError, match='public repository identity'):
+        publish_source.verify_repository()
+
+
+def test_publisher_accepts_only_the_authorized_public_repository(monkeypatch):
+    import publish_source
+    monkeypatch.setattr(publish_source.subprocess, 'run', lambda *args, **kwargs:
+        subprocess.CompletedProcess(args, 0, json.dumps({
+            'isPrivate': False, 'nameWithOwner': 'SulaymanB2024/your-time'}), ''))
+    publish_source.verify_repository()

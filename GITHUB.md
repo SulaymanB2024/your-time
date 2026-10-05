@@ -1,6 +1,6 @@
 # Source repository
 
-The private GitHub repository is `SulaymanB2024/your-time`. It contains code,
+The public GitHub repository is `SulaymanB2024/your-time`. It contains code,
 tests, configuration templates, dependency locks and these technical guides.
 It does not contain the recorded database, screenshots, OCR, captions,
 generated dashboard, exports, model weights or private review notes.
@@ -36,7 +36,7 @@ After reviewing the change and running relevant tests, explicitly push:
 ./.venv/bin/python publish_source.py --push
 ```
 
-The exporter verifies the exact repository, private visibility and previous
+The exporter verifies the exact repository, public visibility and previous
 published commit. It pushes only the source commit to `main`, without force.
 It uses a file allowlist, rejects links/binary payloads and checks common
 credential and embedded-image patterns. These checks reduce accidental
