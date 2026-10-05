@@ -25,7 +25,8 @@ installed Mac. This guard prevents accidental access; it is not an OS sandbox
 for arbitrary native calls or subprocesses.
 The synthetic feature-print integration runs Apple's real Vision framework
 with explicit CPU compute stages, so it also works without a GPU on virtual
-Macs. It checks repeatability, stored vector format, and a changed-image distance.
+Macs when their Vision backend is available. It checks repeatability, stored
+vector format, and a changed-image distance.
 
 For a focused change:
 
