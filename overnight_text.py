@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import math
 import os
 import re
 import subprocess
@@ -31,8 +32,10 @@ COUNTS = {'selected', 'tagged', 'retained_total', 'processed_this_run', 'specifi
           'sensitive_skipped', 'eligible_titles', 'tagged_titles', 'specific_titles',
           'total_blocks', 'complete_blocks', 'attempted_this_run', 'completed_this_run',
           'eligible_blocks', 'summary_evidence_blocks',
+          'summary_input_blocks', 'summary_cited_blocks',
           'insufficient_context_blocks', 'reused', 'failed_this_run', 'propagated', 'days',
           'candidate_frames', 'clusters', 'supported_clusters', 'conflicting_clusters', 'propagated_count'}
+TIMINGS = {'summary_input_seconds', 'summary_cited_seconds'}
 GOOD = {'complete', 'up_to_date', 'private_dashboard_written'}
 CODE = re.compile(r'[a-zA-Z0-9_+-]{1,80}\Z')
 
@@ -47,7 +50,8 @@ def output_summaries(stdout: str) -> list[dict]:
         if not isinstance(value, dict):
             continue
         row = {}
-        for key in ('status', 'stop_reason', 'reason', 'summary_status'):
+        for key in ('status', 'stop_reason', 'reason', 'summary_status',
+                    'summary_stop_reason', 'day_failure_code'):
             item = value.get(key)
             if item is None or isinstance(item, str) and CODE.fullmatch(item):
                 if key in value:
@@ -55,6 +59,10 @@ def output_summaries(stdout: str) -> list[dict]:
         for key in COUNTS:
             item = value.get(key)
             if type(item) is int and item >= 0:
+                row[key] = item
+        for key in TIMINGS:
+            item = value.get(key)
+            if type(item) in (int, float) and math.isfinite(item) and item >= 0:
                 row[key] = item
         if row:
             summaries.append(row)

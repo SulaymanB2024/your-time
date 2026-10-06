@@ -21,6 +21,18 @@ def test_receipts_exclude_bodies_and_unstructured_errors():
         {'status': 'resource_gate', 'reason': 'battery_power'}]
 
 
+def test_receipts_keep_fixed_summary_failure_and_cited_scope_only():
+    values = {'summary_status': 'failed', 'summary_stop_reason': 'day_synthesis_failed',
+              'day_failure_code': 'decoding_error', 'summary_input_blocks': 20,
+              'summary_cited_blocks': 2, 'summary_input_seconds': 600.5,
+              'summary_cited_seconds': 120.25, 'summary': 'PRIVATE CONTENT',
+              'prompt': 'PRIVATE CONTENT'}
+    result = overnight_text.output_summaries(json.dumps(values))[0]
+    assert result['day_failure_code'] == 'decoding_error'
+    assert result['summary_input_seconds'] == 600.5 and result['summary_cited_seconds'] == 120.25
+    assert 'PRIVATE' not in json.dumps(result)
+
+
 def test_failed_stage_does_not_hide_receipt_or_prevent_later_stages(tmp_path, monkeypatch):
     isolate(tmp_path, monkeypatch)
     monkeypatch.setattr(overnight_text, 'text_budget', lambda _: 1000)

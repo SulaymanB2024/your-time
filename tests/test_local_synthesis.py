@@ -2,6 +2,8 @@ import json
 import time
 from datetime import date
 
+import pytest
+
 import local_synthesis
 
 
@@ -318,8 +320,134 @@ def test_summary_has_bounded_input_without_invalidating_cached_chapters(tmp_path
     result = local_synthesis.run_day(date(2026, 10, 3), tmp_path / "fake", "sha", deadline=time.monotonic() + 1000)
     assert result["status"] == "complete" and result["reused"] == 45
     assert result["summary_evidence_blocks"] == len(calls[0]) == 20 and len(calls) == 1
+    assert result["summary_input_blocks"] == 20
+    assert result["summary_cited_blocks"] == result["summary_cited_seconds"] == 0
     assert result["summary_evidence_seconds"] < result["complete_seconds"]
     assert not local_synthesis.needs_synthesis(date(2026, 10, 3), "sha")
+
+
+def test_truncated_summary_records_decode_failure_and_links_the_next_attempt(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from inference_telemetry import Attempt
+
+    monkeypatch.setattr(local_synthesis, "STATE_DIR", tmp_path)
+    identities, commands = [], []
+    def truncated(command, **kwargs):
+        commands.append(command)
+        attempt = Attempt(tmp_path, command, kwargs["telemetry"])
+        attempt.finish("complete", returncode=0)
+        identities.append(attempt.identity)
+        return SimpleNamespace(returncode=0, stdout=b'{"themes":[', telemetry_attempt_id=attempt.identity)
+    monkeypatch.setattr(local_synthesis, "run_model", truncated)
+    for _ in range(2):
+        with pytest.raises(json.JSONDecodeError):
+            local_synthesis.model_call(tmp_path / "fake.gguf", "Synthetic day", local_synthesis.day_schema({"block"}))
+    first, second = [json.loads((tmp_path / "inference-attempts" / (identity + ".json")).read_text())
+                     for identity in identities]
+    assert first["status"] == "complete" and first["result_status"] == "decoding_error"
+    assert second["retry_of"] == identities[0] and second["result_status"] == "decoding_error"
+    assert first["context"]["variant"] == "day_summary"
+    assert first["context"]["prompt_version"] == local_synthesis.DAY_PROMPT_VERSION
+    assert commands[0][commands[0].index("-n") + 1] == "1024"
+
+
+def test_summary_safety_rejection_marks_attempt_without_serializing_its_identity(tmp_path, monkeypatch):
+    from inference_telemetry import Attempt
+
+    monkeypatch.setattr(local_synthesis, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(local_synthesis, "resource_gate", lambda **_: None)
+    attempt = Attempt(tmp_path, [], {"stage": "text", "variant": "day_summary"})
+    attempt.finish("complete", returncode=0)
+    output = local_synthesis.TextModelOutput({"themes": [{"label": "Writing",
+        "summary": "Published the draft", "evidence_ids": ["block"]}],
+        "candidate_outcomes": [], "uncertainty": ""}, attempt.identity)
+    assert attempt.identity not in json.dumps(output)
+    monkeypatch.setattr(local_synthesis, "model_call", lambda *args: (output, 1))
+    report = {"summary_status": "not_run"}
+    local_synthesis._summarize_batch(report, [{"block_id": "block", "sampled_seconds": 120,
+        "result": {"activity_kind": "writing", "focus_label": "Draft"}}], tmp_path / "fake", False)
+    saved = json.loads(attempt.path.read_text())
+    assert report["summary_status"] == "failed"
+    assert saved["result_status"] == report["day_failure_code"] == "unsupported_completion_rejected"
+    assert "Published" not in json.dumps(report)
+    assert local_synthesis.failure_code(ValueError("SECRET PRIVATE WINDOW")) == "schema_error"
+
+
+def test_day_output_bounds_are_independent_of_engine_grammar():
+    ids = {"a", "b", "c"}
+    theme = {"label": "Writing", "summary": "Draft visible", "evidence_ids": ["a"]}
+    invalid = [
+        {"themes": [theme] * 5, "candidate_outcomes": [], "uncertainty": ""},
+        {"themes": [dict(theme, summary="x" * 121)], "candidate_outcomes": [], "uncertainty": ""},
+        {"themes": [dict(theme, evidence_ids=["a", "b", "c"])], "candidate_outcomes": [], "uncertainty": ""},
+        {"themes": [dict(theme, evidence_ids=["a", "a"])], "candidate_outcomes": [], "uncertainty": ""},
+        {"themes": [None], "candidate_outcomes": [], "uncertainty": ""},
+    ]
+    for value in invalid:
+        with pytest.raises(ValueError):
+            local_synthesis.validate_day(value, ids)
+
+
+def test_new_day_version_reuses_chapters_but_refreshes_the_summary(tmp_path, monkeypatch):
+    monkeypatch.setattr(local_synthesis, "ANALYSIS_DIR", tmp_path)
+    monkeypatch.setattr(local_synthesis, "resource_gate", lambda **_: None)
+    block = sample_block("chapter", 12, 120)
+    write_focus(tmp_path, [block])
+    cached = {"block_id": block["id"], "sampled_seconds": 120,
+        "input_sha256": local_synthesis.fingerprint(local_synthesis.block_projection(block)),
+        "model_sha256": "sha", "prompt_version": local_synthesis.PROMPT_VERSION,
+        "status": "complete", "result": {"focus_label": "Draft", "activity_kind": "writing"}}
+    path = tmp_path / "synthesis-2026-10-03.json"
+    path.write_text(json.dumps({"blocks": [cached], "model_sha256": "sha",
+        "day_prompt_version": "focus_day_sample_v1", "summary_status": "complete"}))
+    calls = []
+    def summary_only(model, prompt, schema):
+        assert "themes" in schema["properties"]
+        calls.append(schema)
+        return ({"themes": [{"label": "Writing", "summary": "Draft visible", "evidence_ids": ["chapter"]}],
+                 "candidate_outcomes": [], "uncertainty": ""}, 1)
+    monkeypatch.setattr(local_synthesis, "model_call", summary_only)
+    result = local_synthesis.run_day(date(2026, 10, 3), tmp_path / "fake", "sha", deadline=time.monotonic()+1000)
+    saved = json.loads(path.read_text())
+    assert result["reused"] == 1 and result["completed_this_run"] == 0
+    assert result["summary_status"] == "complete" and len(calls) == 1
+    assert saved["blocks"][0] == cached
+    assert saved["day_prompt_version"] == "focus_day_sample_v2"
+
+
+def test_legacy_valid_summary_keeps_provenance_when_new_generation_fails(tmp_path, monkeypatch):
+    monkeypatch.setattr(local_synthesis, "ANALYSIS_DIR", tmp_path)
+    monkeypatch.setattr(local_synthesis, "resource_gate", lambda **_: None)
+    block = sample_block("chapter", 12, 120)
+    write_focus(tmp_path, [block])
+    cached = {"block_id": "chapter", "sampled_seconds": 120,
+        "input_sha256": local_synthesis.fingerprint(local_synthesis.block_projection(block)),
+        "model_sha256": "sha", "prompt_version": local_synthesis.PROMPT_VERSION,
+        "status": "complete", "result": {"focus_label": "Draft", "activity_kind": "writing"}}
+    legacy = {"blocks": [cached], "model_sha256": "sha", "prompt_version": local_synthesis.PROMPT_VERSION,
+        "status": "complete", "day_prompt_version": "focus_day_sample_v1", "summary_status": "complete",
+        "summary_evidence_ids": ["chapter"], "day_input_sha256": local_synthesis.summary_fingerprint([cached]),
+        "themes": [{"label": "Writing", "summary": "Draft visible", "evidence_ids": ["chapter"]}],
+        "candidate_outcomes": [], "uncertainty": "Selected chapters"}
+    path = tmp_path / "synthesis-2026-10-03.json"
+    path.write_text(json.dumps(legacy))
+    current = {"chapter": cached["input_sha256"]}
+    assert local_synthesis.summary_is_current(legacy, current)
+    assert local_synthesis.needs_synthesis(date(2026, 10, 3), "sha")
+    def fail(*args):
+        raise ValueError("SECRET PRIVATE FAILURE")
+    monkeypatch.setattr(local_synthesis, "model_call", fail)
+    result = local_synthesis.run_day(date(2026, 10, 3), tmp_path / "fake", "sha", deadline=time.monotonic()+1000)
+    saved = json.loads(path.read_text())
+    assert saved["themes"] == legacy["themes"] and saved["blocks"] == legacy["blocks"]
+    assert saved["day_prompt_version"] == "focus_day_sample_v1"
+    assert saved["summary_status"] == "complete" and saved["summary_refresh_status"] == "failed"
+    assert result["status"] == "partial" and result["day_failure_code"] == "schema_error"
+    assert result["summary_input_blocks"] == result["summary_cited_blocks"] == 1
+    assert result["summary_cited_seconds"] == 120
+    assert "SECRET" not in json.dumps(saved)
+    assert local_synthesis.summary_is_current(saved, current)
     saved = json.loads((tmp_path / "synthesis-2026-10-03.json").read_text())
     saved["day_input_sha256"] = "corrupt"
     (tmp_path / "synthesis-2026-10-03.json").write_text(json.dumps(saved))
