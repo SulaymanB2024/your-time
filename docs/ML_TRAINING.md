@@ -156,3 +156,13 @@ base, reload validation also checks the final trained checkpoint, and the paired
 benchmark evaluates that real adapter instead of omitting the experiment. Its
 selection rule is recorded; root semantic review determines acceptance. Further
 checkpoint comparisons must occur on validation before the test candidate freeze.
+
+## Verification memory acceptance
+
+The allocator peak starts before loading weights and spans the controlled
+gradient, update and reload probes. A synchronized verification receipt records
+MLX active/cache/peak bytes and the configured budget separately from sampled
+process RSS and whole-device pressure/swap. Missing or over-budget allocator
+evidence refuses verification; it cannot advance to training as a successful
+check. These are measurements of MLX allocations, not the entire Mac. Real
+values remain unmeasured until the admitted overnight experiment runs.

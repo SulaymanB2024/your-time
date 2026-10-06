@@ -122,7 +122,7 @@ def validate(value: dict, context: dict) -> dict:
         text = value[key]
         if text is None and key != "visible_work":
             continue
-        if not isinstance(text, str) or len(text) > 240 or SENSITIVE_RE.search(text) or EMAIL_RE.search(text) or URL_RE.search(text) or COMPLETION.search(text):
+        if not isinstance(text, str) or not text.strip() or len(text) > 240 or SENSITIVE_RE.search(text) or EMAIL_RE.search(text) or URL_RE.search(text) or COMPLETION.search(text):
             raise ValueError("Invalid or unsupported activity claim")
     mapping = value["claim_evidence"]
     if not isinstance(mapping, dict) or set(mapping) != set(CLAIMS):

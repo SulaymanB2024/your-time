@@ -44,6 +44,9 @@ COMPLETION = re.compile(r"\b(completed|finished|submitted|published|delivered|se
                         r"shipped|purchased|deleted|emailed|posted)\b", re.I)
 SHA = re.compile(r"[a-f0-9]{64}\Z")
 CHECKPOINT = re.compile(r"step-\d{6}-[a-f0-9]{8}\Z")
+ADMISSION_CODES = {"insufficient_window_for_request", "outside_vision_window", "deadline", "battery_power",
+                   "disk_below_10_5_gib", "system_load_high", "memory_status_unavailable", "low_free_memory",
+                   "resource_status_unavailable"}
 
 
 class BenchmarkError(RuntimeError):
@@ -56,6 +59,13 @@ class BenchmarkError(RuntimeError):
 
 class BudgetEnded(BenchmarkError):
     pass
+
+
+def pre_inference_refusal(error) -> bool:
+    from specialization_worker import WorkerError
+
+    return (isinstance(error, WorkerError) and str(error) in ADMISSION_CODES
+            and getattr(error, "telemetry_attempt_id", None) is None)
 
 
 def fingerprint(value) -> str:
@@ -121,7 +131,7 @@ class Guard:
             except (OSError, RuntimeError, subprocess.SubprocessError):
                 reason = "resource_status_unavailable"
             if reason:
-                raise BudgetEnded("resource_gate")
+                raise BudgetEnded(reason)
             self.next_resource_check = time.monotonic() + 5
 
     def remaining(self):
@@ -174,9 +184,11 @@ def parameters(config: dict) -> dict:
               "timeout_seconds": config.get("timeout_seconds", 180),
               "threads": config.get("threads", 4), "seed": config.get("seed", 20261005),
               "batch_requests": config.get("batch_requests", 4)}
+    values["image_crop"] = config.get("image_crop", "none")
     choices = {"image_side": {1024, 1600, 2048}, "image_tokens": {512, 1024, 1536},
                "context_tokens": {2048, 4096}, "threads": {2, 4, 8}}
-    if (any(type(values[k]) is not int or values[k] not in opts for k, opts in choices.items())
+    if (values["image_crop"] not in {"none", "center_80"}
+            or any(type(values[k]) is not int or values[k] not in opts for k, opts in choices.items())
             or type(values["thinking"]) is not bool
             or any(type(values[k]) is not int for k in ("thinking_budget", "max_tokens",
                                                        "timeout_seconds", "seed", "batch_requests"))
@@ -257,12 +269,50 @@ def model_pins(config: dict, study_root: Path) -> dict:
     return pins
 
 
-def experiment_spec(config: dict, study_root: Path) -> dict:
+def runtime_settings(config: dict, study_root: Path, *, exploratory=False, nomination_only=False):
+    if exploratory:
+        return config, None
+    choice = read_state(study_root / "tuning/runtime-choice.json")
+    if not choice:
+        if config.get("tuning_required"):
+            raise BenchmarkError("runtime_selection_required")
+        return config, None
+    body = {k: v for k, v in choice.items() if k != "runtime_choice_sha256"}
+    allowed = {"image_side", "image_tokens", "image_crop", "thinking", "thinking_budget", "batch_requests", "q8_threads"}
+    if (choice.get("parent_configuration_sha256") != config.get("configuration_sha256")
+            or choice.get("runtime_choice_sha256") != fingerprint(body)
+            or not isinstance(choice.get("overrides"), dict) or set(choice["overrides"]) - allowed):
+        raise BenchmarkError("runtime_choice_changed")
+    from specialization_tuning import verify_choice
+
+    verify_choice(config, study_root, choice)
+    decision = {} if nomination_only else read_state(study_root / "tuning/runtime-decision.json")
+    if decision:
+        if (fingerprint({k: v for k, v in decision.items() if k != "runtime_decision_sha256"}) != decision.get("runtime_decision_sha256")
+                or decision.get("runtime_choice_sha256") != choice["runtime_choice_sha256"]
+                or decision.get("parent_configuration_sha256") != config.get("configuration_sha256")
+                or type(decision.get("use_nominated")) is not bool):
+            raise BenchmarkError("runtime_decision_changed")
+        for relative, key in (("results.json", "confirmation_results_sha256"),
+                              ("blind-assessment.json", "confirmation_review_sha256")):
+            if file_digest(study_root / "confirmation/benchmark/validation" / relative, private=True) != decision.get(key):
+                raise BenchmarkError("runtime_confirmation_changed")
+        if not decision["use_nominated"]:
+            return config, None
+    settings = {**config, **choice["overrides"]}
+    parameters(settings)
+    q8_parameters(settings)
+    return settings, choice
+
+
+def experiment_spec(config: dict, study_root: Path, *, exploratory=False, nomination_only=False) -> dict:
     for name, expected in config.get("source_sha256", {}).items():
         if Path(name).name != name or file_digest(PROJECT / name) != expected:
             raise BenchmarkError("frozen_source_changed")
-    spec = {"version": VERSION, "configuration": config, "parameters": parameters(config),
-            "q8_parameters": q8_parameters(config),
+    settings, choice = runtime_settings(config, study_root, exploratory=exploratory, nomination_only=nomination_only)
+    spec = {"version": VERSION, "configuration": config, "parameters": parameters(settings),
+            "q8_parameters": q8_parameters(settings), "runtime_choice": choice,
+            "q8_production_parameters": q8_parameters(config),
             "pins": model_pins(config, study_root),
             "source_sha256": {name: file_digest(PROJECT / name) for name in CODE},
             "preprocessing": {"colour": "RGB", "resize": "thumbnail_LANCZOS",
@@ -295,7 +345,8 @@ def normalize(value):
     return " ".join(unicodedata.normalize("NFKC", value).casefold().split()) if isinstance(value, str) else value
 
 
-def score_response(response: dict, row: dict) -> dict:
+def response_record(response: dict, context: dict) -> dict:
+    """Screen a response without inventing a reference for new activity."""
     if not isinstance(response, dict):
         raise BenchmarkError("invalid_response")
     raw = response.get("raw_output")
@@ -315,7 +366,7 @@ def score_response(response: dict, row: dict) -> dict:
     status = response.get("status", "invalid_response")
     if response.get("status") == "complete" and activity is not None:
         try:
-            activity = parse_result(json.dumps(activity), row["context"])
+            activity = parse_result(json.dumps(activity), context)
         except (TypeError, ValueError):
             activity, status = None, "schema_error"
     else:
@@ -329,6 +380,12 @@ def score_response(response: dict, row: dict) -> dict:
               "activity": activity, "description": response.get("description"),
               "status": status,
               "telemetry_attempt_id": response.get("telemetry_attempt_id")}
+    return result
+
+
+def score_response(response: dict, row: dict) -> dict:
+    result = response_record(response, row["context"])
+    activity = result["activity"]
     if activity:
         reference = row["reference"]
         exact = {key: normalize(activity[key]) == normalize(reference[key])
@@ -392,10 +449,14 @@ class Runner:
 
         self.guard.check(35)
         options = self.spec["parameters"]
-        settings = options if self.worker else self.spec["q8_parameters"]
+        settings = (options if self.worker else self.spec.get("q8_production_parameters", self.spec["q8_parameters"])
+                    if self.variant == "production_q8" else self.spec["q8_parameters"])
         # The resident worker reserves five seconds for request control/cleanup
         # and itself ends 30 seconds before the study deadline.
         timeout = min(settings["timeout_seconds"], int(self.guard.remaining() - 40))
+        if self.spec.get("purpose") == "exploratory_tuning":
+            self.guard.check(settings["timeout_seconds"] + 40)
+            timeout = settings["timeout_seconds"]
         if timeout < 1:
             raise BudgetEnded("benchmark_budget")
         path = Path(row["images"][0])
@@ -410,7 +471,8 @@ class Runner:
                 thinking_budget=options["thinking_budget"], max_tokens=options["max_tokens"],
                 timeout_seconds=timeout, image_side=options["image_side"],
                 image_tokens=options["image_tokens"], context_tokens=options["context_tokens"],
-                seed=options["seed"], request_id=identity)
+                seed=options["seed"], request_id=identity, image_crop=options["image_crop"],
+                experiment_sha256=fingerprint(self.spec))
         pins = self.spec["pins"]["q8"]
         model = {"weights": Path(pins["model_dir"]) / pins["weights"]["name"],
                  "projector": Path(pins["model_dir"]) / pins["projector"]["name"],
@@ -421,7 +483,7 @@ class Runner:
             prompt=prompt(context) if context else PROMPT, context=context,
             prompt_version="activity_context_v1" if context else "visible_task_v1",
             variant=self.variant, image_side=settings["image_side"],
-            image_tokens=settings["image_tokens"], threads=settings["threads"])
+            image_tokens=settings["image_tokens"], threads=settings["threads"], experiment_sha256=fingerprint(self.spec))
 
     def close(self):
         if self.worker:
@@ -600,13 +662,33 @@ def write_assessments(folder: Path, rows: list[dict], data: dict):
     return assessment
 
 
-def _run(config: dict, study_root: Path, budget: int, split: str, spec: dict | None = None) -> dict:
+def session_totals(data: dict) -> dict:
+    """Interrupted wall time is unknown; a reservation is only an upper bound."""
+    sessions = [r for r in data.get("sessions", []) if r.get("stage") == "session"]
+    measured = sum(r["elapsed_seconds"] for r in sessions if r.get("elapsed_seconds") is not None)
+    unknown = [r for r in sessions if r.get("elapsed_seconds") is None]
+    bounded = all(r.get("reserved_seconds") is not None for r in unknown)
+    return {"total_session_seconds": round(measured, 3) if not unknown else None,
+            "measured_session_seconds": round(measured, 3),
+            "interrupted_sessions": len(unknown),
+            "conservative_total_seconds": round(measured + sum(r["reserved_seconds"] for r in unknown), 3) if bounded else None,
+            "wall_time_scope": "measured_plus_reserved_upper_bounds" if unknown else "measured_all_sessions"}
+
+
+def _run(config: dict, study_root: Path, budget: int, split: str, spec: dict | None = None,
+         *, variants=VARIANTS, row_ids=None) -> dict:
     started = time.monotonic()
     guard = Guard(budget)
     try:
         guard.check(35)
     except BudgetEnded as error:
         return {"status": "partial", "stop_reason": str(error), "private_examples_opened": False}
+    if variants != VARIANTS or row_ids is not None:
+        if (split != "validation" or not spec or spec.get("purpose") != "exploratory_tuning"
+                or not variants or len(set(variants)) != len(variants) or set(variants) - set(VARIANTS)
+                or not isinstance(row_ids, (list, tuple)) or not row_ids or len(set(row_ids)) != len(row_ids)
+                or spec.get("comparison_variants") != list(variants) or spec.get("selected_validation_ids") != list(row_ids)):
+            raise BenchmarkError("invalid_exploratory_comparison")
     folder = study_root / "benchmark" / split
     fd = open_private_file(study_root / "benchmark" / "benchmark.lock")
     try:
@@ -614,26 +696,54 @@ def _run(config: dict, study_root: Path, budget: int, split: str, spec: dict | N
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return {"status": "partial", "stop_reason": "benchmark_busy"}
-        spec = spec or experiment_spec(config, study_root)
-        guard.check(35)
-        identity = fingerprint(spec)
-        expected = config["exports"][split]
-        source = DATA_ROOT / ("sealed" if split == "test" else "export") / (split + ".jsonl")
-        rows = load_examples(source, split, expected)
         path = folder / "results.json"
-        data = read_state(path) or {"version": VERSION, "experiment_sha256": identity,
-                                    "specification": spec, "split": split, "results": {}, "sessions": []}
-        if data.get("experiment_sha256") != identity or data.get("split") != split:
+        config_identity = fingerprint(config)
+        data = read_state(path) or {"version": VERSION, "experiment_sha256": None,
+                                    "configuration_sha256": config_identity,
+                                    "specification": None, "split": split, "results": {}, "sessions": []}
+        if data.get("configuration_sha256") != config_identity or data.get("split") != split:
             raise BenchmarkError("resume_identity_mismatch")
-        for row in rows:
-            for variant, record in data["results"].get(row["id"], {}).items():
-                if variant not in VARIANTS or record.get("identity") != example_identity(row, variant, spec):
-                    raise BenchmarkError("resume_example_changed")
-                if record.get("status") == "running":
-                    record.update(status="interrupted", raw_safety=None, raw_safety_available=False,
-                                  exact_proxy=None)
+        for session in data["sessions"]:
+            if session.get("stage") == "session" and session.get("status") == "running":
+                session["status"] = "interrupted"
+        session = {"stage": "session", "status": "running", "elapsed_seconds": None,
+                   "reserved_seconds": budget + 30,
+                   "started_at_utc": datetime.now(timezone.utc).isoformat()}
+        data["sessions"].append(session)
+        # Reserve before spec hashing/export preparation as well as inference.
+        write_json(path, data)
+        try:
+            spec = spec or experiment_spec(config, study_root)
+            guard.check(35)
+            identity = fingerprint(spec)
+            if (data.get("experiment_sha256") not in {None, identity}
+                    or (data.get("experiment_sha256") is None and data["results"])):
+                raise BenchmarkError("resume_identity_mismatch")
+            data.update(experiment_sha256=identity, specification=spec)
+            write_json(path, data)
+            expected = config["exports"][split]
+            source = DATA_ROOT / ("sealed" if split == "test" else "export") / (split + ".jsonl")
+            rows = load_examples(source, split, expected)
+            if row_ids is not None:
+                if set(row_ids) - {r["id"] for r in rows}:
+                    raise BenchmarkError("exploratory_example_changed")
+                by_id = {r["id"]: r for r in rows}
+                rows = [by_id[key] for key in row_ids]
+            for row in rows:
+                for variant, record in data["results"].get(row["id"], {}).items():
+                    if variant not in VARIANTS or record.get("identity") != example_identity(row, variant, spec):
+                        raise BenchmarkError("resume_example_changed")
+                    if record.get("status") == "running":
+                        record.update(status="interrupted", raw_safety=None, raw_safety_available=False, exact_proxy=None)
+            if set(data["results"]) - {row["id"] for row in rows}:
+                raise BenchmarkError("resume_example_changed")
+        except Exception as error:
+            session.update(status="finished", elapsed_seconds=round(time.monotonic() - started, 3),
+                           stop_reason=str(error) if isinstance(error, BenchmarkError) else "preparation_failed")
+            write_json(path, data)
+            raise
         runner, stopped = Runner(spec, guard), None
-        order = list(VARIANTS)
+        order = list(variants)
         random.Random(spec["parameters"]["seed"]).shuffle(order)
         try:
             while True:
@@ -645,6 +755,11 @@ def _run(config: dict, study_root: Path, budget: int, split: str, spec: dict | N
                 variant = min(remaining, key=lambda v: len(rows) - len(pending[v]))
                 guard.check(35)
                 batch = pending[variant][:spec["parameters"]["batch_requests"]]
+                if spec.get("purpose") == "exploratory_tuning":
+                    setting = spec["parameters"] if variant.startswith("mlx") else spec["q8_parameters"]
+                    # Include image admission, protocol/control and the sampler's
+                    # bounded shutdown for every request, not just one block.
+                    guard.check(len(batch) * (setting["timeout_seconds"] + 40) + (335 if variant.startswith("mlx") else 35))
                 start_error = None
                 startup_started = time.monotonic()
                 try:
@@ -652,18 +767,27 @@ def _run(config: dict, study_root: Path, budget: int, split: str, spec: dict | N
                 except (BudgetEnded, ModelBusy):
                     raise
                 except Exception as error:
+                    if pre_inference_refusal(error):
+                        raise BudgetEnded(str(error)) from None
                     start_error = str(error) if isinstance(error, BenchmarkError) else "backend_start_failed"
-                data["sessions"].append({"variant": variant, "stage": "startup",
+                block = {"variant": variant, "stage": "startup", "resident_backend": variant.startswith("mlx"),
+                    "block_id": fingerprint({"session": session["started_at_utc"], "variant": variant, "index": len(data["sessions"])}),
+                    "intended_requests": len(batch), "attempted_requests": 0, "completed_requests": 0,
                     "elapsed_seconds": round(time.monotonic() - startup_started, 3),
-                    "startup_telemetry_attempt_id": (getattr(runner.worker, "ready", {}) or {}).get("startup_telemetry_attempt_id")})
+                    "startup_telemetry_attempt_id": (getattr(runner.worker, "ready", {}) or {}).get("startup_telemetry_attempt_id")}
+                data["sessions"].append(block)
                 if start_error and start_error != "no_selected_adapter":
                     batch = batch[:1]
                 for row in batch:
                     guard.check(35)
                     attempt_started = time.monotonic()
+                    attempt_started_at = datetime.now(timezone.utc).isoformat()
                     run_identity = example_identity(row, variant, spec)
                     data["results"].setdefault(row["id"], {})[variant] = {
-                        "identity": run_identity, "status": "running", "attempted": True}
+                        "identity": run_identity, "status": "running", "attempted": True,
+                        "worker_block_id": block["block_id"],
+                        "attempt_started_at_utc": attempt_started_at}
+                    block["attempted_requests"] += start_error != "no_selected_adapter"
                     write_json(path, data)
                     try:
                         if start_error:
@@ -671,19 +795,18 @@ def _run(config: dict, study_root: Path, budget: int, split: str, spec: dict | N
                         response = runner.infer(row, run_identity)
                         record = score_response(response, row)
                     except (BudgetEnded, ModelBusy):
+                        block["attempted_requests"] -= start_error != "no_selected_adapter"
                         data["results"][row["id"]].pop(variant)
                         write_json(path, data)
                         raise
                     except Exception as error:
-                        from specialization_worker import WorkerError
-
-                        if (isinstance(error, WorkerError) and str(error) == "insufficient_window_for_request"
-                                and getattr(error, "telemetry_attempt_id", None) is None):
+                        if pre_inference_refusal(error):
                             # Image hashing/admission can consume the control
                             # margin. Nothing was inferred: leave this pair pending.
                             data["results"][row["id"]].pop(variant)
+                            block["attempted_requests"] -= start_error != "no_selected_adapter"
                             write_json(path, data)
-                            raise BudgetEnded("benchmark_budget") from None
+                            raise BudgetEnded("benchmark_budget" if str(error) == "insufficient_window_for_request" else str(error)) from None
                         record = {"status": str(error) if isinstance(error, BenchmarkError) else "inference_or_schema_error",
                                   "raw_safety": None, "raw_safety_available": False,
                                   "exact_proxy": None, "error_type": type(error).__name__,
@@ -698,9 +821,11 @@ def _run(config: dict, study_root: Path, budget: int, split: str, spec: dict | N
                         if variant.startswith("mlx") and start_error != "no_selected_adapter":
                             start_error = "worker_unavailable_after_failure"
                     record.update(identity=run_identity, elapsed_seconds=round(time.monotonic() - attempt_started, 3),
+                                  worker_block_id=block["block_id"],
                                   attempted=start_error != "no_selected_adapter",
-                                  attempt_started_at_utc=datetime.now(timezone.utc).isoformat())
+                                  attempt_started_at_utc=attempt_started_at)
                     data["results"].setdefault(row["id"], {})[variant] = record
+                    block["completed_requests"] += record.get("status") == "complete"
                     write_json(path, data)
                     if start_error and start_error != "no_selected_adapter":
                         break
@@ -714,17 +839,18 @@ def _run(config: dict, study_root: Path, budget: int, split: str, spec: dict | N
             stopped = "local_model_busy"
         finally:
             runner.close()
-        data["sessions"].append({"stage": "session", "elapsed_seconds": 0, "stop_reason": stopped,
-                                  "finished_at_utc": datetime.now(timezone.utc).isoformat()})
+        session.update(status="finished", stop_reason=stopped,
+                       finished_at_utc=datetime.now(timezone.utc).isoformat())
         assessments = write_assessments(folder, rows, data)
         write_json(path, data)
         summary = aggregate(rows, data["results"], assessments)
         elapsed = round(time.monotonic() - started, 3)
-        data["sessions"][-1]["elapsed_seconds"] = elapsed
+        session["elapsed_seconds"] = elapsed
         write_json(path, data)
-        summary.update(status="complete" if all(len(data["results"].get(r["id"], {})) == len(VARIANTS) for r in rows) else "partial",
+        summary.update(status="complete" if all(set(data["results"].get(r["id"], {})) == set(variants) for r in rows) else "partial",
                        experiment_sha256=identity, split=split, stop_reason=stopped,
-                       elapsed_seconds=elapsed, total_session_seconds=sum(r["elapsed_seconds"] for r in data["sessions"] if r.get("stage") == "session"),
+                       comparison_variants=list(variants), exploratory_only=row_ids is not None,
+                       elapsed_seconds=elapsed, **session_totals(data),
                        startup_seconds_by_variant={v: round(sum(r["elapsed_seconds"] for r in data["sessions"]
                             if r.get("stage") == "startup" and r.get("variant") == v), 3) for v in VARIANTS})
         write_json(folder / "summary.json", summary)
@@ -736,28 +862,51 @@ def _run(config: dict, study_root: Path, budget: int, split: str, spec: dict | N
 def run_validation(config: dict, study_root: Path, budget: int) -> dict:
     """Study orchestrator API; never opens sealed test or private reference manifest."""
     try:
-        return _run(config, Path(study_root), budget, "validation")
+        root = Path(study_root)
+        spec = None
+        if config.get("tuning_required"):
+            if (root / "tuning/runtime-choice.json").exists():
+                raise BenchmarkError("original_benchmark_closed_after_tuning")
+            spec = experiment_spec(config, root, exploratory=True)
+        return _run(config, root, budget, "validation", spec)
     except BenchmarkError as error:
         return {"status": "partial", "stop_reason": str(error)}
     except Exception as error:
         return {"status": "partial", "stop_reason": "benchmark_error", "error_type": type(error).__name__}
 
 
+def validation_location(frozen_or_spec):
+    if frozen_or_spec.get("specification", frozen_or_spec).get("runtime_choice"):
+        expected = "confirmation/benchmark/validation"
+    else:
+        expected = "benchmark/validation"
+    if frozen_or_spec.get("validation_location", expected) != expected:
+        raise BenchmarkError("validation_location_changed")
+    return expected
+
+
 def freeze_candidate(config: dict, study_root: Path, *, candidate: str,
                      reviewed_assessment_sha256: str) -> dict:
     """Explicit coordinator action after blind validation review; reads no test."""
     folder = Path(study_root) / "benchmark"
+    if config.get("exploratory_only"):
+        raise BenchmarkError("exploratory_results_cannot_freeze_candidate")
     fd = open_private_file(folder / "benchmark.lock")
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         if candidate not in VARIANTS:
             raise BenchmarkError("invalid_candidate")
+        decision = read_state(Path(study_root) / "tuning/runtime-decision.json")
+        if config.get("tuning_required") and not decision:
+            raise BenchmarkError("runtime_confirmation_review_required")
         spec = experiment_spec(config, Path(study_root))
-        data = read_state(folder / "validation" / "results.json")
-        assessments = read_state(folder / "validation" / "blind-assessment.json")
+        location = validation_location(spec)
+        validated = Path(study_root) / location
+        data = read_state(validated / "results.json")
+        assessments = read_state(validated / "blind-assessment.json")
         if (data.get("experiment_sha256") != fingerprint(spec)
                 or assessments.get("experiment_sha256") != fingerprint(spec)
-                or file_digest(folder / "validation" / "blind-assessment.json", private=True) != reviewed_assessment_sha256):
+                or file_digest(validated / "blind-assessment.json", private=True) != reviewed_assessment_sha256):
             raise BenchmarkError("review_or_configuration_changed")
         expected_count = config["exports"]["validation"]["count"]
         runs = [r for variants in data.get("results", {}).values() for r in variants.values()]
@@ -772,9 +921,11 @@ def freeze_candidate(config: dict, study_root: Path, *, candidate: str,
             if run["status"] != "complete" and any(grade[k] for k in GRADES[:4]):
                 raise BenchmarkError("failure_cannot_receive_correct_grade")
         frozen = {"version": VERSION, "candidate": candidate, "specification": spec,
+                  "runtime_decision_sha256": decision.get("runtime_decision_sha256"),
+                  "validation_location": location,
                   "experiment_sha256": fingerprint(spec),
                   "reviewed_assessment_sha256": reviewed_assessment_sha256,
-                  "validation_results_sha256": file_digest(folder / "validation" / "results.json", private=True)}
+                  "validation_results_sha256": file_digest(validated / "results.json", private=True)}
         frozen["frozen_candidate_sha256"] = fingerprint(frozen)
         existing = read_state(folder / "frozen-candidate.json")
         if existing and existing != frozen:
@@ -803,8 +954,12 @@ def run_locked_test(config: dict, study_root: Path, budget: int, *,
         spec = experiment_spec(config, Path(study_root))
         if frozen["experiment_sha256"] != fingerprint(spec) or frozen["specification"] != spec:
             raise BenchmarkError("frozen_configuration_mismatch")
-        if (file_digest(folder / "validation" / "results.json", private=True) != frozen["validation_results_sha256"]
-                or file_digest(folder / "validation" / "blind-assessment.json", private=True) != frozen["reviewed_assessment_sha256"]):
+        decision = read_state(Path(study_root) / "tuning/runtime-decision.json")
+        if decision.get("runtime_decision_sha256") != frozen.get("runtime_decision_sha256"):
+            raise BenchmarkError("runtime_decision_changed")
+        validated = Path(study_root) / validation_location(frozen)
+        if (file_digest(validated / "results.json", private=True) != frozen["validation_results_sha256"]
+                or file_digest(validated / "blind-assessment.json", private=True) != frozen["reviewed_assessment_sha256"]):
             raise BenchmarkError("frozen_review_changed")
         authorized = True
         return _run(config, Path(study_root), max(1, int(guard.remaining())), "test", spec)

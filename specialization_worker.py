@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import copy
 import fcntl
 import hashlib
 import importlib.metadata
@@ -170,8 +171,11 @@ def validate_request(value: dict) -> dict:
     fields = {"version", "id", "context", "image_path", "image_sha256", "thinking",
               "thinking_budget", "max_tokens", "timeout_seconds", "image_side",
               "image_tokens", "seed", "context_tokens"}
-    if not isinstance(value, dict) or set(value) != fields:
+    if not isinstance(value, dict) or not fields <= set(value) or set(value) - fields - {"image_crop"}:
         raise WorkerError("invalid_request")
+    value = {"image_crop": "none", **value}
+    if value["image_crop"] not in {"none", "center_80"}:
+        raise WorkerError("invalid_image_crop")
     if (value["version"] != PROTOCOL or not isinstance(value["id"], str)
             or not IDENTITY.fullmatch(value["id"]) or type(value["thinking"]) is not bool
             or not isinstance(value["context"], dict)
@@ -200,6 +204,29 @@ def validate_request(value: dict) -> dict:
         raise WorkerError("invalid_image")
     encode_frame(value)  # Also rejects non-finite values and oversize contexts.
     return value
+
+
+def context_for_view(context, crop):
+    if crop == "none":
+        return context
+    if crop != "center_80":
+        raise WorkerError("invalid_image_crop")
+    result = copy.deepcopy(context)
+    for item in result.get("evidence", []):
+        if item.get("source") in {"screen_context", "synthetic_screen"}:
+            item["image_view"] = {"mode": crop, "scope": "center_80_percent_each_axis;OCR_and_metadata_cover_full_observation"}
+    return result
+
+
+def crop_image(image, mode):
+    if mode == "none":
+        return image
+    if mode != "center_80":
+        raise WorkerError("invalid_image_crop")
+    x, y = image.width // 10, image.height // 10
+    cropped = image.crop((x, y, image.width - x, image.height - y))
+    image.close()
+    return cropped
 
 
 def encode_frame(value: dict) -> bytes:
@@ -367,10 +394,13 @@ class MlxBackend:
     def generate(self, request: dict, config: WorkerConfig, deadline: float, admission=gate):
         from PIL import Image
 
+        started = time.monotonic()
         cache = self.reset(request["seed"])
+        reset_seconds = time.monotonic() - started
         image = None
         iterator = None
-        started = time.monotonic()
+        preparation_started = time.monotonic()
+        metrics = {}
         try:
             if request["image_path"] is not None:
                 path = private_path(Path(request["image_path"]))
@@ -388,6 +418,7 @@ class MlxBackend:
                     if source.width * source.height > 32_000_000:
                         raise WorkerError("image_too_large")
                     image = source.convert("RGB")
+                    image = crop_image(image, request["image_crop"])
                     image.thumbnail((request["image_side"], request["image_side"]), Image.Resampling.LANCZOS)
             check_admission(deadline, admission)
             formatted = self.template(self.processor, self.config, prompt(request["context"]),
@@ -407,9 +438,16 @@ class MlxBackend:
                 actual = int((inputs["input_ids"] == self.config["image_token_id"]).sum().item())
                 if actual > request["image_tokens"]:
                     raise WorkerError("image_token_budget")
+            else:
+                actual = 0
+            grid = inputs.get("image_grid_thw")
+            prepared_width = prepared_height = None
+            if grid is not None and getattr(grid, "shape", None) == (1, 3):
+                prepared_height = int(grid[0][1].item()) * processor.patch_size
+                prepared_width = int(grid[0][2].item()) * processor.patch_size
             inputs["mask"] = inputs.pop("attention_mask", None)
             self.mx.synchronize()
-            image_prepare_seconds = time.monotonic() - started
+            image_prepare_seconds = time.monotonic() - preparation_started
             check_admission(deadline, admission)
             iterator = self.dispatch.stream_generate(
                 self.model, self.processor, formatted, prompt_cache=cache, **inputs,
@@ -437,23 +475,30 @@ class MlxBackend:
             if last is None or last.finish_reason != "stop":
                 raise WorkerError("output_truncated")
             prompt_rate = getattr(last, "prompt_tps", 0)
-            return output, {"prompt_tokens": last.prompt_tokens,
+            metrics.update({"prompt_tokens": last.prompt_tokens,
                             "generated_tokens": last.generation_tokens,
                             "prompt_seconds": last.prompt_tokens / prompt_rate if prompt_rate > 0 else None,
                             "tokens_per_second": getattr(last, "generation_tps", None),
                             "image_prepare_seconds": image_prepare_seconds,
+                            "vision_tokens": actual,
+                            "image_prepared_width": prepared_width, "image_prepared_height": prepared_height,
                             "generation_seconds": time.monotonic() - first_token,
                             "time_to_first_token_seconds": first_token - started,
                             "mlx_active_bytes": self.mx.get_active_memory(),
                             "mlx_cache_bytes": self.mx.get_cache_memory(),
-                            "mlx_peak_bytes": self.mx.get_peak_memory()}
+                            "mlx_peak_bytes": self.mx.get_peak_memory(),
+                            "reset_prepare_seconds": reset_seconds})
+            return output, metrics
         finally:
+            cleanup_started = time.monotonic()
             if iterator is not None:
                 iterator.close()
             cache.clear()
             if image is not None:
                 image.close()
             self.reset(request["seed"])
+            metrics.update(cleanup_seconds=time.monotonic() - cleanup_started,
+                           request_total_seconds=time.monotonic() - started)
 
 
 def handle_request(backend, request: dict, config: WorkerConfig, deadline: float, admission=gate):
@@ -563,6 +608,7 @@ class WorkerController:
             if not ready or ready.get("version") != PROTOCOL or ready.get("status") != "ready":
                 raise WorkerError("worker_start_failed")
             self.ready = ready
+            attempt.data["result_status"] = "not_applicable"
             attempt.finish("complete", returncode=0, engine_metrics={"load_seconds": ready.get("load_seconds")})
             self.ready["startup_telemetry_attempt_id"] = attempt.identity
             return self
@@ -575,7 +621,8 @@ class WorkerController:
     def request(self, context: dict, *, image_path: str | None = None,
                 image_sha256: str | None = None, thinking=False, thinking_budget=256,
                 max_tokens=768, timeout_seconds=180, image_side=1600,
-                image_tokens=1024, context_tokens=4096, seed=0, request_id=None):
+                image_tokens=1024, context_tokens=4096, seed=0, request_id=None, image_crop="none",
+                experiment_sha256=None):
         if not self.serial.acquire(blocking=False):
             raise ModelBusy("worker_request_busy")
         attempt = None
@@ -583,13 +630,14 @@ class WorkerController:
             if self.child is None or self.child.poll() is not None:
                 raise WorkerError("worker_not_running")
             check_admission(self.deadline)
+            context = context_for_view(context, image_crop)
             request = validate_request({"version": PROTOCOL, "id": request_id or uuid.uuid4().hex,
                                         "context": context, "image_path": image_path,
                                         "image_sha256": image_sha256, "thinking": thinking,
                                         "thinking_budget": thinking_budget, "max_tokens": max_tokens,
                                         "timeout_seconds": timeout_seconds, "image_side": image_side,
                                         "image_tokens": image_tokens, "seed": seed,
-                                        "context_tokens": context_tokens})
+                                        "context_tokens": context_tokens, "image_crop": image_crop})
             if self.count >= self.config.max_requests or request["id"] in self.seen:
                 raise WorkerError("request_limit_or_duplicate")
             if self.deadline - time.monotonic() < timeout_seconds + 5:
@@ -597,9 +645,13 @@ class WorkerController:
             self.seen.add(request["id"])
             self.count += 1
             attempt = Attempt(Path(self.config.state_dir),
-                              ["-c", str(context_tokens), "-n", str(max_tokens), "--image-max-tokens", str(image_tokens)],
+                              ["-c", str(context_tokens), "-n", str(max_tokens), "--image-max-tokens", str(image_tokens),
+                               "--thinking", str(int(thinking)), "--thinking-budget", str(thinking_budget),
+                               "--image-side", str(image_side), "--center-crop", str(int(image_crop == "center_80")),
+                               "--seed", str(seed), "--request-timeout", str(timeout_seconds)],
                               {"stage": "vision", "variant": "mlx_resident", "cache_state": "fresh",
                                "engine_version": "mlx-vlm-0.7.6", "prompt_version": "activity_context_v1",
+                               "experiment_sha256": experiment_sha256,
                                "model_sha256": self.ready["model_sha256"],
                                "adapter_sha256": self.ready.get("adapter_sha256"),
                                "template_sha256": self.ready.get("template_sha256"),
@@ -607,7 +659,7 @@ class WorkerController:
                                "prompt_sha256": hashlib.sha256(prompt(context).encode()).hexdigest(),
                                "input_sha256": fingerprint({"context": context, "image_sha256": image_sha256,
                                    "parameters": {key: request[key] for key in ("thinking", "thinking_budget", "max_tokens",
-                                       "timeout_seconds", "image_side", "image_tokens", "context_tokens", "seed")}})})
+                                       "timeout_seconds", "image_side", "image_tokens", "context_tokens", "seed", "image_crop")}})})
             attempt.start_sampling(self.child.pid)
             deadline = min(self.deadline, time.monotonic() + timeout_seconds)
             self.channel.send(request, deadline)
@@ -637,6 +689,7 @@ class WorkerController:
             response["memory_metrics"] = bounded
             metrics["load_seconds"] = 0  # Loading belongs to the separate startup attempt.
             attempt.data["startup_attempt_id"] = self.ready.get("startup_telemetry_attempt_id")
+            attempt.data["result_status"] = "complete"  # Both protocol and result schema were validated.
             attempt.finish("complete", returncode=0, engine_metrics=metrics)
             response["telemetry_attempt_id"] = attempt.identity
             response["telemetry_available"] = not attempt.error

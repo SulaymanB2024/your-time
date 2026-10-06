@@ -59,13 +59,21 @@ open. Resource gates and per-call deadlines remain active; synthesis time is res
 | `mlx_base` | Unchanged quantized MLX 9B with the contextual prompt; defaults side 1600, image tokens 512, context 4096, max generation 768, thinking false and fixed study seed. |
 | `mlx_adapter` | Exact MLX base settings with the validation-proxy preselected adapter. If the proxy selects the unchanged base, independently compare the final completed epoch's trained adapter, explicitly recording `final_epoch_experiment_requires_semantic_review`. Proxy selection never establishes semantic quality or deployment acceptance. |
 
-The Q8 pair isolates prompt/context; the MLX pair isolates training. Q8 versus MLX
+The original Q8 pair isolates prompt/context; the MLX pair isolates training. Q8 versus MLX
 is a combined quantization, runtime, thinking and preprocessing comparison. Its
 quality difference cannot be attributed to LoRA. The existing Q8 runner has no
 explicit seed/thinking/context-length controls; those actual limitations are
 included in the frozen spec. Image/resolution/thread and MLX thinking ablations
 require separately fingerprinted paired studies. Q8 options have explicit `q8_`
 prefixes, so MLX budgets cannot silently weaken production.
+
+The [runtime exploration](ML_TUNING.md) adds separate, validation-only studies
+after original baseline review. Its nominated settings must pass a new full
+validation comparison and semantic review. In that final comparison, a changed
+`context_q8` thread setting combines context and thread changes relative to
+`production_q8`; use the preserved original comparison to isolate prompting.
+Production Q8 controls remain identical. Candidate freezing binds the accepted
+runtime decision and its exact original or confirmation review location.
 
 Resume identity covers the full study configuration, actual source hashes,
 production/context prompt template, per-example prompt/context/reference/image,

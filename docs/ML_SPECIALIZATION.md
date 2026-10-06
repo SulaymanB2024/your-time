@@ -44,7 +44,12 @@ attempts and total elapsed to calculate sustainable capacity with a 20% reserve.
 identities. The existing overnight launcher calls it before ordinary production
 vision. It allows at most 90 minutes per night for at most 14 nights, progresses
 through verification, resumable training, reload validation and paired validation
-benchmarks, and then waits for coordinating quality review. Explicit candidate acceptance
+benchmarks, and then waits for coordinating quality review. A separately frozen
+[runtime exploration](ML_TUNING.md) compares single-factor settings in two
+counterbalanced rounds, with independent grading of each output. The sole
+nominated setting receives a new full validation comparison before acceptance;
+an individual quality or safety regression retains the original controls.
+Explicit candidate acceptance
 freezes the reviewed configuration before admitting the sealed test comparison;
 the test results require a second semantic review. Failed stages retain
 receipts; gates and configuration changes are explicitly reported. No adapter is
@@ -92,10 +97,9 @@ The study's scheduled state does not establish that any training has run.
   existing evidence for semantic assessment; no additional image upload is
   authorized. Twenty validation and nineteen sealed test examples are a pilot.
 - Model training/promotion: not yet run; do not describe scheduled work as successful.
-- Exact Oct 4 readback found 6,883 foreground episodes fragmented by polling
-  jitter. Grouping matching context across at most two seconds reduced this to
-  784, preserving exactly 34,452.544758 observed seconds. Gaps remain unallocated;
-  anchors inside gaps and context/state/source changes cannot acquire support.
+- Grouping matching context across at most two seconds preserves exact observed
+  time. Gaps remain unallocated; anchors inside gaps and context/state/source
+  changes cannot acquire support. Private daily measurements stay out of source.
 
 ## Continuation and release checkpoint
 
@@ -114,7 +118,7 @@ The preflight checks establish software/API preparation. They do not establish
 real 9B loading, Metal memory peaks, gradients, adapter quality, or accepted
 production rollout. AC/resource/window gates still control admission.
 
-Final preflight: `tools/check.py` passed 438 synthetic tests plus lint and source
+The release preflight uses `tools/check.py` for synthetic tests, lint and source
 syntax. A pre-inference time refusal remains pending rather than becoming a
 permanent model error. Verified canonical aliases agree; conflicting canonical
 identities abstain. The untouched prepared configuration was explicitly refrozen

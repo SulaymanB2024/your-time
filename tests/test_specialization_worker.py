@@ -256,6 +256,53 @@ def test_independent_requests_reset_recurrent_position_sampling_and_caches(confi
     assert len(caches) == 6
 
 
+def test_engine_wall_metrics_include_both_state_resets(config, monkeypatch):
+    backend, _, _, _ = mocked_mlx_backend()
+    clock = [0.0]
+    original = backend.reset
+    def reset(seed):
+        clock[0] += 2
+        return original(seed)
+    def now():
+        clock[0] += .01
+        return clock[0]
+    backend.reset = reset
+    monkeypatch.setattr(worker.time, "monotonic", now)
+    _, metrics = backend.generate(request(), config, 100, lambda: None)
+    assert metrics["reset_prepare_seconds"] >= 2
+    assert metrics["cleanup_seconds"] >= 2
+    assert metrics["request_total_seconds"] >= 4
+    assert metrics["time_to_first_token_seconds"] >= 2
+
+
+def test_crop_preserves_original_evidence_and_records_actual_preprocessor_geometry(config):
+    import numpy as np
+    from PIL import Image
+
+    original = context()
+    viewed = worker.context_for_view(original, "center_80")
+    assert "image_view" not in original["evidence"][0]
+    assert "full_observation" in viewed["evidence"][0]["image_view"]["scope"]
+    path = Path(config.image_roots[0]) / "synthetic.png"
+    path.parent.mkdir(mode=0o700, parents=True)
+    with Image.new("RGB", (1000, 600), "white") as image:
+        image.save(path)
+    path.chmod(0o600)
+    backend, _, _, _ = mocked_mlx_backend()
+    sizes = []
+    def prepare(*args, **kwargs):
+        sizes.append(kwargs["images"][0].size)
+        return {"input_ids": np.array([[2] * 8]), "attention_mask": None, "image_grid_thw": np.array([[1, 4, 8]])}
+    backend.prepare_inputs = prepare
+    _, metrics = backend.generate(request(image_path=str(path), image_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+                                          image_crop="center_80"), config, time.monotonic() + 5, lambda: None)
+    assert sizes == [(800, 480)]
+    assert metrics["vision_tokens"] == 8
+    assert metrics["image_prepared_width"] == 128 and metrics["image_prepared_height"] == 64
+    with Image.open(path) as source:
+        assert source.size == (1000, 600)  # Original private image was never edited.
+
+
 def test_allocator_metrics_are_separate_from_engine_timings(config):
     backend, _, _, _ = mocked_mlx_backend()
     response = worker.handle_request(backend, request(), config, time.monotonic() + 5, lambda: None)
@@ -339,10 +386,27 @@ def test_controller_holds_one_lock_entire_lifetime_and_private_telemetry(fake_ch
         text = receipt.read_text()
         assert "An editor shows" not in text and "synthetic-a" not in text
         assert receipt.stat().st_mode & 0o777 == 0o600
+        assert json.loads(text)["result_status"] == "complete"
     finally:
         controller.close()
     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     os.close(fd)
+
+
+def test_controller_receipts_distinguish_effective_decoding_settings(fake_child_controller):
+    from telemetry_summary import summarize
+
+    controller = fake_child_controller.start()
+    try:
+        for thinking, side in ((False, 1024), (True, 2048)):
+            controller.request(context(), thinking=thinking, image_side=side, timeout_seconds=5)
+        receipts = [json.loads(p.read_text()) for p in (Path(controller.config.state_dir) / "inference-attempts").glob("*.json")]
+        requests = [r for r in receipts if r["context"]["stage"] == "vision"]
+        assert len({r["configuration_sha256"] for r in requests}) == 2
+        groups = summarize(Path(controller.config.state_dir))["groups"]
+        assert len([g for g in groups if g.startswith("vision:" )]) == 2
+    finally:
+        controller.close()
 
 
 def test_worker_inherits_lock_even_when_parent_descriptor_is_lost(fake_child_controller):

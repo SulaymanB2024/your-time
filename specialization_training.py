@@ -88,6 +88,30 @@ def fingerprint(value) -> str:
                                      ensure_ascii=False).encode()).hexdigest()
 
 
+def allocator_memory(mx, limit_gib):
+    """MLX-owned bytes; RSS and whole-device memory are separate measurements."""
+    values = {}
+    for key, method in (("active_bytes", "get_active_memory"), ("cache_bytes", "get_cache_memory"),
+                        ("peak_bytes", "get_peak_memory")):
+        try:
+            value = getattr(mx, method)()
+        except (AttributeError, RuntimeError, ValueError):
+            value = None
+        values[key] = value if type(value) is int and value >= 0 else None
+    return {"scope": "mlx_allocator", "window": "model_load_and_controlled_verification",
+            **values, "configured_limit_bytes": limit_gib * 1024**3,
+            "available": all(v is not None for v in values.values()),
+            "peak_within_configured_limit": values["peak_bytes"] <= limit_gib * 1024**3 if values["peak_bytes"] is not None else None}
+
+
+def require_verification_memory(mx, limit_gib, run_dir):
+    memory = allocator_memory(mx, limit_gib)
+    if not memory["available"] or not memory["peak_within_configured_limit"]:
+        write_state(run_dir / "verification-memory.json", memory)
+        raise TrainingError("verification_memory_unavailable_or_exceeds_budget")
+    return memory
+
+
 def private_path(path: Path, *, directory=False) -> Path:
     """Read-only checks: no implicit chmod/create of supplied inputs."""
     path = Path(path)
@@ -434,6 +458,7 @@ class MLXEngine:
         mx.set_memory_limit(limit)
         mx.set_cache_limit(256 * 1024**2)
         mx.set_wired_limit(min(limit, mx.device_info()["max_recommended_working_set_size"]))
+        mx.reset_peak_memory()  # Start before loading; include load and gradient/reload probes.
         mx.random.seed(recipe.seed)
         guard.check(180)
         self.model, self.processor = load(str(model_path), trust_remote_code=False, local_files_only=True)
@@ -677,10 +702,13 @@ class MLXEngine:
         self.model.update(self.unflatten(list(initial.items())))
         self.optimizer = self.optim.Adam(learning_rate=self.recipe.learning_rate)
         restore_rng(self.mx, rng)
+        self.mx.synchronize()
+        memory = require_verification_memory(self.mx, self.recipe.memory_limit_gib, run_dir)
         return {"examples_checked": len(train) + len(validation), "max_sequence_tokens": maximum,
                 "image_alignment": True, "assistant_only_mask": True, "image_changes_logits": True,
                 "finite_nonzero_gradients": True, "update_after_microbatches": self.recipe.accumulation,
-                "zero_adapter_parity": True, "frozen_weights_unchanged": True, "adapter_reload_parity": True}
+                "zero_adapter_parity": True, "frozen_weights_unchanged": True, "adapter_reload_parity": True,
+                "allocator_memory": memory}
 
     def restore_adapters(self, folder):
         config = json.loads(read_private(folder / "adapter_config.json"))

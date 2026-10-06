@@ -118,11 +118,18 @@ by the worker.
 ## Metrics and verification limits
 
 `load_seconds` measures model/adapter load and synchronization, excluding
-manifest hashing and imports; it is charged only to the first completed
-request's receipt. Request timings expose time to first token and elapsed
-generation time after the first token; they do not claim to isolate vision
+manifest hashing and imports. A separate startup attempt owns that cost;
+request attempts link to it and report zero additional load. Request timings
+include time to first token from before the initial state reset, elapsed
+generation after the first token, both state reset/cleanup costs, and full
+backend request wall time. They do not claim to isolate vision
 encoding from text prefill. Prompt and generation token counts come from the
 runtime's completion record.
+
+Attempt summaries do not estimate sustainable nightly capacity: startup,
+preparation between attempts, worker teardown and interrupted sessions require
+the full benchmark/trial wall-time journal. Unknown elapsed costs remain null;
+crash reservations are conservative bounds, not measured durations.
 
 `memory_metrics` has `scope="mlx_allocator"` and active/cache/peak byte counts.
 These are process allocator measurements, not device-wide memory ownership.

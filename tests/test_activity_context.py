@@ -57,6 +57,15 @@ def test_completion_synonyms_are_not_accepted_as_visible_work():
         validate(answer, context)
 
 
+@pytest.mark.parametrize("field", ["project_candidate", "task_candidate", "visible_work"])
+def test_blank_claims_cannot_masquerade_as_supported_labels(field):
+    context = {"evidence": [{"id": "current", "source": "screen_context"}]}
+    value = result(context)
+    value[field] = "  "
+    with pytest.raises(ValueError, match="activity claim"):
+        validate(value, context)
+
+
 def test_raw_safety_flags_precede_redaction_and_never_copy_content():
     marker = "private@example.invalid"
     result = raw_safety_checks("<think>reasoning</think>" + marker + " was sent")

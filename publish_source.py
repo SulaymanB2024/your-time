@@ -17,7 +17,7 @@ SOURCE_REF = 'refs/heads/codex/github-source'
 CI_FILES = {'.github/workflows/checks.yml'}
 DOCS = {'.gitignore', 'README.md', 'SECURITY.md', 'GITHUB.md', 'uv.lock', 'Makefile',
         'docs/ARCHITECTURE.md', 'docs/DEVELOPMENT.md', 'docs/CI.md', 'docs/ML_SPECIALIZATION.md',
-        'requirements-ml.txt', 'docs/ML_WORKER.md', 'docs/ML_TRAINING.md', 'docs/ML_EVALUATION.md', 'docs/ML_CHRONICLE.md'}
+        'requirements-ml.txt', 'docs/ML_WORKER.md', 'docs/ML_TRAINING.md', 'docs/ML_EVALUATION.md', 'docs/ML_CHRONICLE.md', 'docs/ML_TRIAL.md', 'docs/ML_TUNING.md'}
 ROOT_SOURCE_FILES = {
     'activity_context.py',
     'activity_episode_store.py',
@@ -91,6 +91,8 @@ ROOT_SOURCE_FILES = {
     'specialization_dataset.py',
     'specialization_study.py',
     'specialization_training.py',
+    'specialization_tuning.py',
+    'specialization_trial.py',
     'specialization_worker.py',
     'task_corrections.py',
     'telemetry_summary.py',

@@ -77,6 +77,14 @@ def test_device_gpu_statistics_are_never_model_attributed():
     assert safe_context({"image_width": float("nan"), "prompt_version": "unsafe label"}) == {}
 
 
+def test_variable_preparation_time_does_not_break_retry_identity(tmp_path):
+    first = Attempt(tmp_path, ["model", "-n", "100"], {"input_sha256": "a" * 64, "image_prepare_seconds": .1})
+    first.finish("process_error")
+    second = Attempt(tmp_path, ["model", "-n", "100"], {"input_sha256": "a" * 64, "image_prepare_seconds": .2})
+    assert second.data["retry_of"] == first.identity
+    assert second.data["context"]["image_prepare_seconds"] == .2
+
+
 def test_invalid_subprocess_arguments_do_not_leave_a_running_attempt(tmp_path):
     with pytest.raises(ValueError):
         run_model([sys.executable], state_dir=tmp_path, capture_output=True, stdout=subprocess.PIPE)

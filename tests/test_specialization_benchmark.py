@@ -402,6 +402,34 @@ def test_pending_budget_interruption_does_not_become_a_false_attempt(harness, mo
     assert all(not variants for variants in data["results"].values())
 
 
+def test_preparation_crash_retains_unmeasured_reservation(harness, monkeypatch):
+    config, study, rows, calls = harness
+    original = benchmark.load_examples
+    def interrupted(*args):
+        data = benchmark.read_state(study / "benchmark/validation/results.json")
+        assert data["sessions"][0]["status"] == "running"
+        assert data["sessions"][0]["reserved_seconds"] == 1030
+        raise KeyboardInterrupt
+    monkeypatch.setattr(benchmark, "load_examples", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        benchmark.run_validation(config, study, 1000)
+    monkeypatch.setattr(benchmark, "load_examples", original)
+    result = benchmark.run_validation(config, study, 1000)
+    assert result["status"] == "complete"
+    assert result["total_session_seconds"] is None
+    assert result["conservative_total_seconds"] >= 1030
+    assert result["interrupted_sessions"] == 1
+
+
+def test_resource_guard_retains_exact_validated_stop_reason(monkeypatch):
+    import vision_batch
+
+    monkeypatch.setattr(benchmark, "remaining_seconds", lambda *a, **k: 1000)
+    monkeypatch.setattr(vision_batch, "resource_gate", lambda **k: "battery_power")
+    with pytest.raises(benchmark.BudgetEnded, match="^battery_power$"):
+        benchmark.Guard(1000).check()
+
+
 def test_export_hash_mismatch_does_not_echo_private_content(tmp_path):
     root = tmp_path / "data"
     row = example()
@@ -457,6 +485,32 @@ def test_startup_is_counted_in_wall_capacity(harness, monkeypatch):
     assert summary["total_session_seconds"] == 40
     assert sum(summary["startup_seconds_by_variant"].values()) == 40
     assert sum(v["total_attempt_seconds"] for v in summary["variants"].values()) == 0
+
+
+def test_crashed_session_keeps_unknown_cost_and_conservative_reservation(harness, monkeypatch):
+    config, study, rows, calls = harness
+    original = benchmark.Runner.infer
+    clock = [0.0]
+    interrupted = False
+    def infer(self, row, identity):
+        nonlocal interrupted
+        clock[0] += 7
+        if not interrupted and len(calls) == 1:
+            interrupted = True
+            raise KeyboardInterrupt
+        return original(self, row, identity)
+    monkeypatch.setattr(benchmark.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(benchmark.Runner, "infer", infer)
+    with pytest.raises(KeyboardInterrupt):
+        benchmark.run_validation(config, study, 1000)
+    data = benchmark.read_state(study / "benchmark/validation/results.json")
+    assert data["sessions"][0]["status"] == "running"
+    assert data["sessions"][0]["elapsed_seconds"] is None
+    summary = benchmark.run_validation(config, study, 1000)
+    assert summary["status"] == "complete"
+    assert summary["total_session_seconds"] is None
+    assert summary["interrupted_sessions"] == 1
+    assert summary["conservative_total_seconds"] >= 1030
 
 
 def test_mlx_runner_uses_pinned_worker_identity_and_identical_pair_settings(tmp_path, monkeypatch):

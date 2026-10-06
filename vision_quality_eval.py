@@ -126,7 +126,7 @@ def run_image(path: Path, model: dict, *, timeout_seconds: int | None = None,
               max_tokens: int = 1024, prompt: str = PROMPT,
               prompt_version: str = PROMPT_VERSION, variant: str = "production",
               image_side: int = 1600, image_tokens: int = 1024,
-              threads: int = 4, context: dict | None = None) -> dict:
+              threads: int = 4, context: dict | None = None, experiment_sha256: str | None = None) -> dict:
     if image_side not in {1024, 1600, 2048} or image_tokens not in {512, 1024, 1536} or threads not in {2, 4, 8}:
         raise ValueError("Unsupported benchmark configuration")
     started = time.monotonic()
@@ -157,6 +157,7 @@ def run_image(path: Path, model: dict, *, timeout_seconds: int | None = None,
                                        timeout=timeout_seconds,
                                        telemetry={"stage": "vision", "variant": variant,
                                                   "model_sha256": model.get("weights_sha256"),
+                                                  "experiment_sha256": experiment_sha256,
                                                   "input_sha256": sha256_file(path),
                                                   "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
                                                   "projector_sha256": model.get("projector_sha256"),

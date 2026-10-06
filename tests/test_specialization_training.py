@@ -80,6 +80,36 @@ def test_recipe_rejects_unreviewed_hyperparameters():
         training.Recipe(epochs=3)
 
 
+def test_verification_memory_distinguishes_allocator_peak_from_rss():
+    from types import SimpleNamespace
+
+    mx = SimpleNamespace(get_active_memory=lambda: 6 * 1024**3, get_cache_memory=lambda: 100,
+                         get_peak_memory=lambda: 11 * 1024**3)
+    result = training.allocator_memory(mx, 10)
+    assert result["scope"] == "mlx_allocator"
+    assert result["available"] and not result["peak_within_configured_limit"]
+    assert result["peak_bytes"] > result["active_bytes"]
+    assert "whole" not in result["scope"] and "rss" not in result
+    mx.get_peak_memory = lambda: None
+    result = training.allocator_memory(mx, 10)
+    assert result["available"] is False
+    assert result["peak_bytes"] is result["peak_within_configured_limit"] is None
+
+
+@pytest.mark.parametrize("peak", [None, 11 * 1024**3])
+def test_unavailable_or_excess_allocator_peak_refuses_verification_and_preserves_receipt(tmp_path, peak):
+    from types import SimpleNamespace
+
+    mx = SimpleNamespace(get_active_memory=lambda: 6 * 1024**3, get_cache_memory=lambda: 100,
+                         get_peak_memory=lambda: peak)
+    with pytest.raises(training.TrainingError, match="verification_memory_unavailable_or_exceeds_budget"):
+        training.require_verification_memory(mx, 10, tmp_path)
+    path = tmp_path / "verification-memory.json"
+    saved = training.read_state(path)
+    assert saved["peak_bytes"] == peak and saved["scope"] == "mlx_allocator"
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
 def test_all_hybrid_targets_are_exact_and_no_recurrent_gates():
     keys = model_keys()
     assert len(keys) == 128

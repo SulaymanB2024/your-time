@@ -24,7 +24,8 @@ from private_io import open_private_file, write_json
 VERSION = "inference_telemetry_v1"
 SAFE_LABEL = re.compile(r"[a-zA-Z0-9_.-]{1,80}\Z")
 HASH = re.compile(r"[a-f0-9]{64}\Z")
-NUMERIC_FLAGS = {"-c", "-n", "-t", "-tb", "-ngl", "--image-max-tokens", "--temp"}
+NUMERIC_FLAGS = {"-c", "-n", "-t", "-tb", "-ngl", "--image-max-tokens", "--temp",
+                 "--thinking", "--thinking-budget", "--image-side", "--center-crop", "--seed", "--request-timeout"}
 
 
 def number(value):
@@ -99,6 +100,9 @@ def engine_timings(stderr: bytes | str | None) -> dict:
               "prompt_tokens": None, "generated_tokens": None,
               "vision_encode_seconds": None, "tokens_per_second": None,
               "image_prepare_seconds": None,
+              "reset_prepare_seconds": None, "cleanup_seconds": None,
+              "request_total_seconds": None,
+              "vision_tokens": None, "image_prepared_width": None, "image_prepared_height": None,
               "time_to_first_token_seconds": None}
     for label, key in (("load time", "load_seconds"),
                        ("prompt eval time", "prompt_seconds"),
@@ -154,7 +158,9 @@ class Attempt:
                                            "gpu": "whole_device_not_model_specific", "rss": "process_resident_memory_not_total_Metal_allocation"},
                      "logical_cpu_count": os.cpu_count(), "samples": [],
                      "cpu_scope": "process_percent_of_one_core", "device_scope": "whole_device"}
-        request_hash = hashlib.sha256(json.dumps({"context": self.data["context"], "configuration": config}, sort_keys=True).encode()).hexdigest()
+        identity_context = {key: value for key, value in self.data["context"].items()
+                            if key not in {"image_prepare_seconds", "retry_of"}}
+        request_hash = hashlib.sha256(json.dumps({"context": identity_context, "configuration": config}, sort_keys=True).encode()).hexdigest()
         self.data["request_sha256"] = request_hash
         self.index_path = state_dir / "inference-attempt-index" / (request_hash + ".json")
         if self.index_path.exists():
