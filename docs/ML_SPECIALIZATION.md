@@ -76,7 +76,8 @@ The study's scheduled state does not establish that any training has run.
   `938d8919941c6e7efd3c7150eff7fe9d12afa631`, approximately 5.98 GB,
   downloaded and SHA-256 verified. Production Q8 remains unchanged.
 - Installed isolated MLX-VLM 0.7.6 environment; exact dependencies are pinned in
-  `requirements-ml.txt`. No real model load or training has run in this stage.
+  `requirements-ml.txt`. Current execution state belongs in the private
+  verification, progress and stage receipts; installation alone proves no run.
 - Four helpers remain available for goal-backed refinement in waves of two.
   Source preflights found and root fixed native MLX RNG restore, dropped pixel
   budgets in MLX-VLM's input wrapper, missing Torch/Torchvision preprocessing
@@ -96,7 +97,8 @@ The study's scheduled state does not establish that any training has run.
 - Reference review permission is exhausted at 100 distinct images. Reuse their
   existing evidence for semantic assessment; no additional image upload is
   authorized. Twenty validation and nineteen sealed test examples are a pilot.
-- Model training/promotion: not yet run; do not describe scheduled work as successful.
+- A committed training checkpoint establishes training progress. Adapter quality
+  and production promotion require the later independent acceptance gates.
 - Grouping matching context across at most two seconds preserves exact observed
   time. Gaps remain unallocated; anchors inside gaps and context/state/source
   changes cannot acquire support. Private daily measurements stay out of source.
@@ -123,5 +125,6 @@ syntax. A pre-inference time refusal remains pending rather than becoming a
 permanent model error. Verified canonical aliases agree; conflicting canonical
 identities abstain. The untouched prepared configuration was explicitly refrozen
 after these reviews, preserving its earlier configuration and recording zero
-started nights. Actual training, gradients on the 9B model, semantic comparisons
-and the three-night trial remain pending.
+started nights. Once a stage executes, preserve that configuration and its
+receipts. Subsequent source changes cannot silently refreeze an executed study.
+Semantic comparisons and the three-night trial require their own measured proof.

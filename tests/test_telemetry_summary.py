@@ -44,6 +44,23 @@ def test_successful_process_without_decode_disposition_is_unknown(tmp_path):
     row = next(iter(summarize(tmp_path)["groups"].values()))
     assert row["complete_process_and_decode"] == 0
     assert row["complete_process"] == row["decoding_disposition_unknown"] == 1
+    assert row["failed_or_pending"] == row["decode_failed"] == row["process_failed"] == 0
+
+
+def test_process_and_decode_failures_do_not_double_count_or_absorb_unknowns(tmp_path):
+    attempt(tmp_path, "success")
+    attempt(tmp_path, "training", result_status=None)
+    attempt(tmp_path, "decode", result_status="schema_error")
+    attempt(tmp_path, "crash", status="process_error", result_status="schema_error")
+    attempt(tmp_path, "pending", status="running", result_status=None)
+    attempt(tmp_path, "unknown", status=None, result_status=None)
+    row = next(iter(summarize(tmp_path)["groups"].values()))
+    assert row["attempts"] == 6
+    assert row["complete_process"] == 3
+    assert row["complete_process_and_decode"] == 1
+    assert row["process_failed"] == row["process_pending"] == row["decode_failed"] == 1
+    assert row["failed_or_pending"] == 3
+    assert row["process_disposition_unknown"] == row["decoding_disposition_unknown"] == 1
 
 
 def test_content_fields_and_untrusted_files_cannot_enter_summary(tmp_path):
