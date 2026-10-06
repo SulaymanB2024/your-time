@@ -133,10 +133,26 @@ crash reservations are conservative bounds, not measured durations.
 
 `memory_metrics` has `scope="mlx_allocator"` and active/cache/peak byte counts.
 These are process allocator measurements, not device-wide memory ownership.
-The existing telemetry sampler records process CPU/RSS and labels AGX GPU
+The existing telemetry sampler attempts process CPU/RSS and labels AGX GPU
 measurements as whole-device; unavailable samples remain null. Receipts store
 numeric measurements and approved identities, never evidence, prompts,
 thinking, raw model output, or exception bodies.
+
+`process_observer.py` provides separate supplemental measurements when macOS
+refuses the sampler's privileged `ps` executable inside the network sandbox.
+It uses native process counters, binds the running overnight job by PID and
+process start identity, and visits only owned descendants. CPU percentages are
+measured over each interval using the current Mach timebase. RSS and physical
+footprint stay per process; shared memory is never summed. These job-process
+observations have no per-attempt linkage and never replace historical nulls.
+
+The observer has its own single-instance lock, a private bounded JSONL spool
+and a final receipt with the spool hash. It stops when its exact job ends, at
+its explicit time/storage limit, or before the vision window closes. A worker
+timer bounds its lifetime even if the launching process disappears. The CLI
+launches its worker under the existing network-denial profile. It neither takes
+the model lock nor loads weights, and it never signals an observed process.
+Check actual samples, final status and hashes before accepting its measurements.
 
 Focused verification uses synthetic packs, mocked MLX state, and disposable
 stdio subprocesses. It covers request isolation, bounds, hashes, adapter shapes,

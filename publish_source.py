@@ -96,6 +96,7 @@ ROOT_SOURCE_FILES = {
     'specialization_worker.py',
     'task_corrections.py',
     'telemetry_summary.py',
+    'process_observer.py',
     'topic_allocation.py',
     'vision_batch.py',
     'vision_capacity.py',
