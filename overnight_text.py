@@ -36,6 +36,9 @@ COUNTS = {'selected', 'tagged', 'retained_total', 'processed_this_run', 'specifi
           'insufficient_context_blocks', 'reused', 'failed_this_run', 'propagated', 'days',
           'candidate_frames', 'clusters', 'supported_clusters', 'conflicting_clusters', 'propagated_count'}
 TIMINGS = {'summary_input_seconds', 'summary_cited_seconds'}
+FAILURE_CODES = frozenset({'timeout', 'decoding_error', 'schema_error',
+                          'sensitive_output_rejected', 'unsupported_completion_rejected',
+                          'process_error'})
 GOOD = {'complete', 'up_to_date', 'private_dashboard_written'}
 CODE = re.compile(r'[a-zA-Z0-9_+-]{1,80}\Z')
 
@@ -51,11 +54,14 @@ def output_summaries(stdout: str) -> list[dict]:
             continue
         row = {}
         for key in ('status', 'stop_reason', 'reason', 'summary_status',
-                    'summary_stop_reason', 'day_failure_code'):
+                    'summary_stop_reason'):
             item = value.get(key)
             if item is None or isinstance(item, str) and CODE.fullmatch(item):
                 if key in value:
                     row[key] = item
+        failure = value.get('day_failure_code')
+        if isinstance(failure, str) and failure in FAILURE_CODES:
+            row['day_failure_code'] = failure
         for key in COUNTS:
             item = value.get(key)
             if type(item) is int and item >= 0:

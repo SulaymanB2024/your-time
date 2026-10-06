@@ -33,6 +33,12 @@ def test_receipts_keep_fixed_summary_failure_and_cited_scope_only():
     assert 'PRIVATE' not in json.dumps(result)
 
 
+def test_unknown_summary_failure_values_cannot_enter_receipts():
+    for failure in ('PRIVATE_TOKEN', 'PRIVATE DETAILS', ['PRIVATE'], None):
+        output = json.dumps({'status': 'partial', 'day_failure_code': failure})
+        assert overnight_text.output_summaries(output) == [{'status': 'partial'}]
+
+
 def test_failed_stage_does_not_hide_receipt_or_prevent_later_stages(tmp_path, monkeypatch):
     isolate(tmp_path, monkeypatch)
     monkeypatch.setattr(overnight_text, 'text_budget', lambda _: 1000)
