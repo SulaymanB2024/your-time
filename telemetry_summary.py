@@ -19,6 +19,12 @@ def measured(value):
     return value if type(value) in (int, float) and math.isfinite(value) and value >= 0 else None
 
 
+def startup_without_decoding(item):
+    context = item.get("context")
+    return (isinstance(context, dict) and context.get("stage") == "vision_startup"
+            and item.get("result_status") == "not_applicable")
+
+
 def summarize(root: Path = STATE_DIR) -> dict:
     attempts = []
     for path in (root / "inference-attempts").glob("*.json"):
@@ -52,8 +58,14 @@ def summarize(root: Path = STATE_DIR) -> dict:
         process_failed = sum(isinstance(r.get("status"), str)
                              and r["status"] not in {"complete", "running"}
                              for r in values)
+        # Resident startup has no caption to decode. Only the explicitly
+        # declared startup stage may use this disposition; a generation cannot
+        # bypass failure accounting by declaring its result not applicable.
+        no_decode = [r for r in process_done if startup_without_decoding(r)]
         decode_failed = sum(isinstance(r.get("result_status"), str)
-                            and r["result_status"] != "complete" for r in process_done)
+                            and r["result_status"] != "complete"
+                            and not startup_without_decoding(r)
+                            for r in process_done)
         elapsed = [r["process_seconds"] for r in done if measured(r.get("process_seconds")) is not None]
         samples = [(r, s) for r in values if isinstance(r.get("samples"), list) for s in r["samples"] if isinstance(s, dict)]
         cpu = [s["cpu_percent_one_core"] / r["logical_cpu_count"] for r, s in samples
@@ -66,6 +78,7 @@ def summarize(root: Path = STATE_DIR) -> dict:
         result[key] = {"attempts": len(values), "complete_process_and_decode": len(done),
                        "complete_process": len(process_done),
                        "decoding_disposition_unknown": sum(r.get("result_status") is None for r in process_done),
+                       "decoding_not_applicable": len(no_decode),
                        "process_pending": process_pending,
                        "process_failed": process_failed,
                        "decode_failed": decode_failed,
@@ -81,8 +94,8 @@ def summarize(root: Path = STATE_DIR) -> dict:
                        "estimated_frames_per_6_5h_20_percent_reserve": None,
                        "capacity_scope": "requires_full_session_wall_time_from_benchmark_or_trial;attempts_exclude_startup_cleanup_and_preparation_gaps",
                        "gpu_scope": "whole_device_not_attributable_to_model"}
-    return {"version": "telemetry_summary_v3", "groups": result,
-            "failure_scope": "process_failure_or_explicit_decode_failure;missing_decode_disposition_is_unknown",
+    return {"version": "telemetry_summary_v4", "groups": result,
+            "failure_scope": "process_failure_or_explicit_decode_failure;missing_decode_disposition_is_unknown;successful_declared_startup_has_no_decode",
             "missing_measurements": "null; CPU/RSS exclude some Metal memory; GPU counters cover all apps"}
 
 

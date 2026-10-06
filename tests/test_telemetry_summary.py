@@ -74,3 +74,25 @@ def test_content_fields_and_untrusted_files_cannot_enter_summary(tmp_path):
     result = summarize(tmp_path)
     assert marker not in json.dumps(result)
     assert sum(r["attempts"] for r in result["groups"].values()) == 1
+
+
+def test_successful_startup_has_no_decode_and_cannot_count_as_a_frame(tmp_path):
+    attempt(tmp_path, "startup", context={"stage": "vision_startup", "variant": "mlx_resident"},
+            result_status="not_applicable")
+    row = next(iter(summarize(tmp_path)["groups"].values()))
+    assert row["complete_process"] == row["decoding_not_applicable"] == 1
+    assert row["complete_process_and_decode"] == row["decode_failed"] == 0
+    assert row["decoding_disposition_unknown"] == row["failed_or_pending"] == 0
+    assert row["mean_request_seconds"] is None
+
+
+def test_not_applicable_does_not_hide_generation_or_startup_process_errors(tmp_path):
+    attempt(tmp_path, "generation", result_status="not_applicable")
+    attempt(tmp_path, "invalid_context", context=None, result_status="not_applicable")
+    attempt(tmp_path, "startup_error", context={"stage": "vision_startup", "variant": "mlx_resident"},
+            status="worker_start_failed", result_status="not_applicable")
+    groups = summarize(tmp_path)["groups"].values()
+    assert sum(row["decoding_not_applicable"] for row in groups) == 0
+    assert sum(row["decode_failed"] for row in groups) == 2
+    assert sum(row["process_failed"] for row in groups) == 1
+    assert sum(row["failed_or_pending"] for row in groups) == 3
