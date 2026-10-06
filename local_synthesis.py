@@ -16,6 +16,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from daily_analysis import ANALYSIS_DIR, ZONE, private_write
+from engine_identity import llama_identity
 from model_execution import ModelBusy, run_model
 from private_io import open_private_file, prepare_directory
 from secure_store import STATE_DIR
@@ -161,8 +162,13 @@ def model_call(model: Path, prompt: str, schema: dict) -> tuple[dict, float]:
         command = ["/usr/bin/sandbox-exec", "-f", str(SANDBOX), str(LLAMA_COMPLETION),
                    "-m", str(model), "-f", str(prompt_path), "-c", "4096", "-n", "768",
                    "-ngl", "99", "-t", "4", "-tb", "4", "--temp", "0", "-j", json.dumps(schema),
-                   "--no-display-prompt", "--offline", "--no-perf", "--simple-io"]
+                   "--no-display-prompt", "--offline", "--perf", "--simple-io"]
         result = run_model(command, state_dir=STATE_DIR, capture_output=True, timeout=MAX_CALL_SECONDS,
+                                telemetry={"stage": "text", "prompt_version": PROMPT_VERSION,
+                                           "input_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
+                                           "model_sha256": next((item["sha256"] for item in json.loads(MODEL_MANIFEST.read_text())["files"] if item["name"] == model.name and model.parent == MODEL_DIR), None),
+                                           "engine_version": "llama.cpp-0.5.0",
+                                           "engine_sha256": llama_identity(LLAMA_COMPLETION)},
                                 env={"HOME": str(Path.home()),
                                      "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
                                      "LANG": "en_US.UTF-8"})

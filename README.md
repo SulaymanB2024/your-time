@@ -164,6 +164,25 @@ elapsed time. A failed stage does not suppress the later stages or dashboard
 refresh. Exit zero with a resource gate is not described as completed analysis.
 The three scheduled text-stage argument lists are validated by regression tests.
 
+### Local specialization experiment
+
+`specialization_study.py` reserves up to 90 minutes per night for a finite,
+resumable MLX-VLM QLoRA experiment on the same Qwen3.5-9B family. The remaining
+vision window continues production Q8 analysis. A bounded resident worker uses
+private pipes, fresh request caches, the shared model lock and network denial.
+Code, assets, inputs and parameters are frozen for paired comparisons.
+
+Private per-attempt telemetry records timing, tokens, process CPU/RSS and
+whole-device resource counters. Missing measurements remain null; GPU counters
+include other applications. No prompts, screen text, captions or raw diagnostics
+enter telemetry. Reference examples, weights and adapters remain outside Git.
+
+Training completion and literal-match proxies cannot promote an adapter.
+Independent validation review, a frozen held-out test and three trial nights
+must establish a deployment recommendation. See the [specialization contract](docs/ML_SPECIALIZATION.md),
+[training guide](docs/ML_TRAINING.md), [worker protocol](docs/ML_WORKER.md),
+and [evaluation guide](docs/ML_EVALUATION.md).
+
 The capture LaunchAgents also have five-minute start triggers, allowing an
 existing loaded collector to retry after a successful low-storage stop.
 Storage guards still apply on every retry. An explicit capture pause unloads

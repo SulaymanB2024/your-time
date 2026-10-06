@@ -16,8 +16,12 @@ REMOTE = f'https://github.com/{REPOSITORY}.git'
 SOURCE_REF = 'refs/heads/codex/github-source'
 CI_FILES = {'.github/workflows/checks.yml'}
 DOCS = {'.gitignore', 'README.md', 'SECURITY.md', 'GITHUB.md', 'uv.lock', 'Makefile',
-        'docs/ARCHITECTURE.md', 'docs/DEVELOPMENT.md', 'docs/CI.md'}
+        'docs/ARCHITECTURE.md', 'docs/DEVELOPMENT.md', 'docs/CI.md', 'docs/ML_SPECIALIZATION.md',
+        'requirements-ml.txt', 'docs/ML_WORKER.md', 'docs/ML_TRAINING.md', 'docs/ML_EVALUATION.md', 'docs/ML_CHRONICLE.md'}
 ROOT_SOURCE_FILES = {
+    'activity_context.py',
+    'activity_episode_store.py',
+    'chronicle_activity.py',
     'behavior_analysis.py',
     'browser_bridge.py',
     'build_calendar_reader.zsh',
@@ -37,14 +41,17 @@ ROOT_SOURCE_FILES = {
     'data_quality.py',
     'download_quality_model.py',
     'download_vision_model.py',
+    'engine_identity.py',
     'import_legacy_mac.py',
     'index_features.py',
     'index_screenshots.py',
+    'inference_telemetry.py',
     'install_browser_host.py',
     'local_dashboard.py',
     'local_synthesis.py',
     'mac_activity.py',
     'model_execution.py',
+    'model_deadline.py',
     'network-off.sb',
     'open_dashboard.zsh',
     'overnight_schedule.py',
@@ -79,7 +86,14 @@ ROOT_SOURCE_FILES = {
     'secure_vision_fallback.zsh',
     'secure_window_reader.zsh',
     'setup_check.py',
+    'specialization_assets.py',
+    'specialization_benchmark.py',
+    'specialization_dataset.py',
+    'specialization_study.py',
+    'specialization_training.py',
+    'specialization_worker.py',
     'task_corrections.py',
+    'telemetry_summary.py',
     'topic_allocation.py',
     'vision_batch.py',
     'vision_capacity.py',
@@ -120,7 +134,7 @@ def allowed(path: str) -> bool:
     return (len(item.parts) == 2 and
             ((item.parts[0] == 'tests' and item.name.startswith('test_') and item.suffix == '.py') or
              (path == 'tests/conftest.py') or
-             (path == 'tools/check.py') or
+             (path in {'tools/check.py', 'tools/check_ml_runtime.py'}) or
              (item.parts[0] == 'launchagents' and item.suffix == '.plist') or
              (item.parts[0] == 'native' and item.suffix in {'.m', '.plist'}) or
              (item.parts[0] == 'browser_extension' and item.suffix in {'.js', '.css', '.html'})))

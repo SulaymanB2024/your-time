@@ -48,7 +48,8 @@ def clip_interval(start: datetime, end: datetime, lower: datetime, upper: dateti
     return clipped if clipped[0] < clipped[1] else None
 
 
-def mac_segments(rows: list[dict], start: datetime, end: datetime) -> tuple[list[dict], list[dict]]:
+def observed_mac_runs(rows: list[dict], start: datetime, end: datetime) -> list[dict]:
+    """Return exact disjoint support; polling gaps never become observed time."""
     samples = []
     for row in sorted(rows, key=lambda item: item["timestamp_utc"]):
         if row["source"] not in {"mac_window_sample", "mac_idle", "mac_locked",
@@ -72,7 +73,7 @@ def mac_segments(rows: list[dict], start: datetime, end: datetime) -> tuple[list
         if at < until:
             trimmed.append((at, until, row))
 
-    segments = []
+    runs = []
     for at, until, row in trimmed:
         state = {"mac_window_sample": "active", "mac_idle": "idle", "mac_locked": "locked",
                  "mac_window_legacy": "active", "mac_idle_legacy": "idle"}[row["source"]]
@@ -83,28 +84,42 @@ def mac_segments(rows: list[dict], start: datetime, end: datetime) -> tuple[list
             state = "unattributed"
         app = data.get("app") if state in {"active", "unattributed"} else None
         title = data.get("title") if state == "active" else None
-        site_host = data.get("site_host") if state in {"active", "unattributed"} else None
-        if (segments and segments[-1]["state"] == state and segments[-1]["evidence"] == evidence
-                and segments[-1]["app"] == app
-                and segments[-1]["window"] == title
-                and segments[-1].get("site_host") == site_host
+        host = data.get("site_host") if state in {"active", "unattributed"} else None
+        body = {"start_utc": at.isoformat(), "end_utc": until.isoformat(),
+                "state": state, "app": app, "window": title, "site_host": host,
+                "context_key": host, "sampled_seconds": seconds_between(at, until),
+                "evidence": evidence}
+        body["id"] = "sample-" + hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
+        runs.append(body)
+    return runs
+
+
+def mac_segments(rows: list[dict], start: datetime, end: datetime) -> tuple[list[dict], list[dict]]:
+    runs = observed_mac_runs(rows, start, end)
+    segments = []
+    for run in runs:
+        at, until = datetime.fromisoformat(run["start_utc"]), datetime.fromisoformat(run["end_utc"])
+        if (segments and all(segments[-1].get(key) == run.get(key)
+                             for key in ("state", "evidence", "app", "window", "site_host"))
                 and at - datetime.fromisoformat(segments[-1]["end_utc"]) <= MAC_SAMPLE_GAP):
             item = segments[-1]
             item["end_utc"] = until.isoformat()
             item["sample_count"] += 1
-            item["sampled_seconds"] += seconds_between(at, until)
+            item["sampled_seconds"] += run["sampled_seconds"]
+            if item["support_runs"][-1]["end_utc"] == run["start_utc"]:
+                item["support_runs"][-1]["end_utc"] = run["end_utc"]
+            else:
+                item["support_runs"].append({key: run[key] for key in ("start_utc", "end_utc")})
         else:
-            segments.append({
-                "start_utc": at.isoformat(), "end_utc": until.isoformat(),
-                "state": state, "app": app, "window": title,
-                "site_host": site_host,
-                "sample_count": 1, "sampled_seconds": seconds_between(at, until),
-                "evidence": evidence,
-            })
+            segments.append({key: run[key] for key in ("start_utc", "end_utc", "state", "app",
+                                                     "window", "site_host", "sampled_seconds", "evidence")})
+            segments[-1]["sample_count"] = 1
+            segments[-1]["support_runs"] = [{key: run[key] for key in ("start_utc", "end_utc")}]
 
     gaps = []
     cursor = start
-    for at, until, _ in trimmed:
+    for run in runs:
+        at, until = datetime.fromisoformat(run["start_utc"]), datetime.fromisoformat(run["end_utc"])
         if seconds_between(cursor, at) >= 60:
             gaps.append({"start_utc": cursor.isoformat(), "end_utc": at.isoformat(),
                          "seconds": seconds_between(cursor, at)})
@@ -245,7 +260,7 @@ def phone_source_quality() -> dict:
         "source_behind_ledger_minutes", "interpretation")}
 
 
-def analyze(day: date, *, now: datetime | None = None) -> dict:
+def analyze(day: date, *, now: datetime | None = None, rows: list[dict] | None = None) -> dict:
     start = datetime.combine(day, time.min, tzinfo=ZONE).astimezone(timezone.utc)
     day_end = datetime.combine(day + timedelta(days=1), time.min, tzinfo=ZONE).astimezone(timezone.utc)
     now = now or datetime.now(timezone.utc)
@@ -255,7 +270,7 @@ def analyze(day: date, *, now: datetime | None = None) -> dict:
     end = min(day_end, now)
     if end <= start:
         raise ValueError("Cannot analyze a future day")
-    rows = load_rows(start, end)
+    rows = load_rows(start, end) if rows is None else rows
     segments, gaps = mac_segments(rows, start, end)
     mac_totals = Counter()
     app_totals = Counter()

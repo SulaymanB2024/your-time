@@ -22,6 +22,24 @@ def slot_id(day: date, start: datetime) -> str:
     return hashlib.sha256(f"review-v1:{day.isoformat()}:{start.isoformat()}".encode()).hexdigest()[:24]
 
 
+def unknown_seconds(report: dict, start: datetime, end: datetime) -> float:
+    """Intersect exact support; absent sparse support cannot justify task time."""
+    total = 0.0
+    for segment in report["mac"]["segments"]:
+        if segment["state"] != "unattributed":
+            continue
+        lower, upper = (datetime.fromisoformat(segment[key]) for key in ("start_utc", "end_utc"))
+        supports = segment.get("support_runs")
+        if supports is None:
+            if abs((upper-lower).total_seconds() - segment["sampled_seconds"]) > 1e-6:
+                continue
+            supports = [{"start_utc": lower.isoformat(), "end_utc": upper.isoformat()}]
+        for support in supports:
+            at, until = (datetime.fromisoformat(support[key]) for key in ("start_utc", "end_utc"))
+            total += max(0.0, (min(end, until) - max(start, at)).total_seconds())
+    return total
+
+
 def candidates(day: date, report: dict | None = None) -> list[dict]:
     report = report or analyze(day)
     start = datetime.fromisoformat(report["start_utc"])
@@ -30,16 +48,7 @@ def candidates(day: date, report: dict | None = None) -> list[dict]:
     cursor = start
     while cursor < end:
         upper = min(end, cursor + timedelta(seconds=SLOT_SECONDS))
-        total = 0.0
-        for segment in report["mac"]["segments"]:
-            if segment["state"] != "unattributed":
-                continue
-            lower = datetime.fromisoformat(segment["start_utc"])
-            finish = datetime.fromisoformat(segment["end_utc"])
-            overlap = max(0.0, (min(upper, finish) - max(cursor, lower)).total_seconds())
-            duration = (finish - lower).total_seconds()
-            if duration:
-                total += overlap * segment["sampled_seconds"] / duration
+        total = unknown_seconds(report, cursor, upper)
         if total >= MIN_REVIEW_SECONDS:
             slots.append({"id": slot_id(day, cursor), "day_local": day.isoformat(),
                           "start_utc": cursor.isoformat(), "end_utc": upper.isoformat(),
@@ -65,6 +74,24 @@ def existing_labels(day: date) -> dict[str, str]:
     return dict(rows)
 
 
+def current_intervals(day: date) -> list[dict]:
+    """Current confirmed scope, including its stored cutoff and revision."""
+    if not DB_PATH.exists():
+        return []
+    database = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+    try:
+        rows = database.execute(
+            "SELECT id,start_utc,end_utc,label,created_at_utc FROM task_corrections "
+            "WHERE day_local=? AND evidence_tier='user_confirmed_label'", (day.isoformat(),)).fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    finally:
+        database.close()
+    return [{"id": identity, "start_utc": start, "end_utc": end, "label": label,
+             "created_at_utc": revision, "evidence_tier": "user_confirmed_label"}
+            for identity, start, end, label, revision in rows]
+
+
 def active_outcomes(day: date) -> list[dict]:
     if not DB_PATH.exists():
         return []
@@ -84,7 +111,8 @@ def active_outcomes(day: date) -> list[dict]:
 
 
 def review(day: date, report: dict | None = None) -> list[dict]:
-    labels = existing_labels(day)
+    report = report or analyze(day)
+    labels = {item["id"]: item for item in current_intervals(day)}
     outcomes = {item["source_correction_id"] for item in active_outcomes(day)}
     topics = [(datetime.fromisoformat(item["timestamp_utc"]), item["topic"])
               for item in read_supported_tags(day)]
@@ -93,7 +121,14 @@ def review(day: date, report: dict | None = None) -> list[dict]:
         start = datetime.fromisoformat(row["start_utc"])
         end = datetime.fromisoformat(row["end_utc"])
         suggested = Counter(topic for at, topic in topics if start <= at < end)
-        result.append({**row, "confirmed_label": labels.get(row["id"]),
+        scope = labels.get(row["id"])
+        confirmed = (unknown_seconds(report, datetime.fromisoformat(scope["start_utc"]),
+                                     datetime.fromisoformat(scope["end_utc"])) if scope else 0)
+        confirmed = min(confirmed, row["unknown_seconds"])
+        result.append({**row, "confirmed_label": scope["label"] if scope and confirmed >= row["unknown_seconds"] else None,
+                       "confirmed_scope": ({"label": scope["label"], "start_utc": scope["start_utc"],
+                                             "end_utc": scope["end_utc"], "sampled_seconds": round(confirmed, 3)} if scope else None),
+                       "unconfirmed_seconds": round(max(0, row["unknown_seconds"] - confirmed), 3),
                        "suggested_label": suggested.most_common(1)[0][0] if suggested else None,
                        "outcome_marked": row["id"] in outcomes})
     return result
@@ -103,7 +138,8 @@ def set_label(day: date, identity: str, label: str) -> dict:
     label = validate_text(label, 65)
     if not label or label.casefold() == "unclear":
         raise ValueError("Choose a specific, non-sensitive task label")
-    row = next((item for item in candidates(day) if item["id"] == identity), None)
+    report = analyze(day)
+    row = next((item for item in candidates(day, report) if item["id"] == identity), None)
     if row is None:
         raise ValueError("Review interval is no longer available")
     now = datetime.now(timezone.utc).isoformat()
@@ -120,8 +156,11 @@ def set_label(day: date, identity: str, label: str) -> dict:
             (identity, day.isoformat(), row["start_utc"], row["end_utc"],
              label, now, "user_confirmed_label"),
         )
+    scope = next(item for item in current_intervals(day) if item["id"] == identity)
+    seconds = unknown_seconds(report, datetime.fromisoformat(scope["start_utc"]), datetime.fromisoformat(scope["end_utc"]))
     return {"id": identity, "day_local": day.isoformat(), "label": label,
-            "sampled_seconds": row["unknown_seconds"], "evidence_tier": "user_confirmed_label"}
+            "sampled_seconds": round(seconds, 3), "start_utc": scope["start_utc"],
+            "end_utc": scope["end_utc"], "evidence_tier": "user_confirmed_label"}
 
 
 def clear_label(day: date, identity: str) -> bool:
@@ -168,11 +207,11 @@ def retract_outcome(day: date, correction_id: str) -> bool:
 
 
 def summary(day: date, report: dict | None = None) -> list[dict]:
-    labels = existing_labels(day)
+    report = report or analyze(day)
     totals = Counter()
-    for row in candidates(day, report):
-        if row["id"] in labels:
-            totals[labels[row["id"]]] += row["unknown_seconds"]
+    for row in current_intervals(day):
+        totals[row["label"]] += unknown_seconds(report, datetime.fromisoformat(row["start_utc"]),
+                                               datetime.fromisoformat(row["end_utc"]))
     return [{"label": label, "sampled_seconds": round(seconds, 3),
              "status": "user_confirmed_label"}
             for label, seconds in totals.most_common()]

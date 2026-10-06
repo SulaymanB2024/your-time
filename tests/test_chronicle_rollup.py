@@ -114,3 +114,24 @@ def test_topic_identity_preserves_punctuation_case_nonascii_and_evidence_tier():
     assert len({chronicle_rollup.workstream_id(label) for label in labels}) == len(labels)
     assert chronicle_rollup.workstream_id("Planning", "specific_model") != chronicle_rollup.workstream_id("Planning", "broad_context")
     assert chronicle_rollup.workstream_id("Planning") == chronicle_rollup.workstream_id("Planning")
+
+
+def test_historical_dependency_identity_changes_on_correction_revision(tmp_path, monkeypatch):
+    monkeypatch.setattr(secure_store, 'STATE_DIR', tmp_path)
+    monkeypatch.setattr(secure_store, 'DB_PATH', tmp_path / 'ledger.sqlite3')
+    monkeypatch.setattr(chronicle_rollup, 'STATE_DIR', tmp_path)
+    monkeypatch.setattr(chronicle_rollup, 'DB_PATH', tmp_path / 'ledger.sqlite3')
+    with secure_store.connect():
+        pass
+    day = date(2026, 9, 1)
+    first = chronicle_rollup.source_dependencies(day)
+    with secure_store.connect() as db:
+        db.execute('INSERT INTO task_corrections VALUES (?,?,?,?,?,?,?)',
+                   ('label', day.isoformat(), '2026-09-01T12:00:00+00:00',
+                    '2026-09-01T12:07:00+00:00', 'Drafting', '2026-10-05T00:00:00+00:00',
+                    'user_confirmed_label'))
+    second = chronicle_rollup.source_dependencies(day)
+    assert first != second
+    with secure_store.connect() as db:
+        db.execute("UPDATE task_corrections SET evidence_tier='retracted' WHERE id='label'")
+    assert chronicle_rollup.source_dependencies(day) != second

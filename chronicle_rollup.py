@@ -12,7 +12,8 @@ from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from daily_analysis import ZONE, analyze, union_seconds
+from chronicle_activity import day_activity
+from daily_analysis import MAX_PHONE_SESSION, ZONE, analyze, load_rows, union_seconds
 from private_io import atomic_write, prepare_directory, validate_file
 from screen_context_tagging import allocate_visible_context, read_supported_tags
 from secure_store import DB_PATH, STATE_DIR
@@ -24,7 +25,7 @@ ROOT = STATE_DIR / "chronicle"
 DAYS = ROOT / "days"
 MONTHS = ROOT / "months"
 YEARS = ROOT / "years"
-VERSION = 3
+VERSION = 4
 
 
 def private_write_if_changed(path: Path, value: dict) -> bool:
@@ -138,8 +139,10 @@ def calendar_summary(day: date) -> dict:
 def day_summary(day: date, *, now: datetime | None = None) -> dict:
     from behavior_analysis import build as build_behavior
     from behavior_analysis import compact
-    report = analyze(day, now=now)
+    now = now or datetime.now(timezone.utc)
     start, full_end = local_boundaries(day)
+    source_rows = load_rows(start, min(full_end, now))
+    report = analyze(day, now=now, rows=source_rows)
     analyzed_end = datetime.fromisoformat(report["analyzed_through_utc"])
     elapsed = max(0.0, (analyzed_end - start).total_seconds())
     mac = report["mac"]["state_sampled_seconds"]
@@ -183,6 +186,7 @@ def day_summary(day: date, *, now: datetime | None = None) -> dict:
         "work_artifacts": work_artifacts(day),
         "calendar": calendar_summary(day),
         "screen_workstreams": screen_workstreams,
+        "episode_activity": day_activity(day, end=analyzed_end, rows=source_rows),
         "user_task_labels": correction_summary(day, report),
         "task_outcomes": active_outcomes(day),
         "screen_context_status": screen_context.get("status", "not_run"),
@@ -274,6 +278,15 @@ def aggregate(days: list[dict], *, period: str, key: str) -> dict:
         "user_task_labels": [{"label": label, "sampled_seconds": round(seconds, 3),
                               "status": "user_confirmed_label"}
                              for label, seconds in user_labels.most_common()],
+        "episode_activity": {
+            "version": "chronicle_activity_period_v1",
+            "model_allocation_enabled": False,
+            "episode_count": sum(item.get("episode_activity", {}).get("episode_count", 0) for item in days),
+            "totals": {name: round(sum(item.get("episode_activity", {}).get("totals", {}).get(name, 0)
+                                       for item in days), 6)
+                       for name in ("observed_sampled_seconds", "foreground_seconds",
+                                    "allocated_foreground_seconds", "unknown_foreground_seconds",
+                                    "nonforeground_seconds")}},
         "user_labeled_seconds": round(sum(user_labels.values()), 3),
         "confirmed_results_count": sum(confirmed_results.values()),
         "confirmed_results": [{"label": label, "count": count}
@@ -296,6 +309,53 @@ def aggregate(days: list[dict], *, period: str, key: str) -> dict:
     }
 
 
+def source_dependencies(day: date) -> str:
+    """Invalidate historical accounts when their source or review evidence changes."""
+    start, end = local_boundaries(day)
+    digest = hashlib.sha256()
+    for name in ("chronicle_rollup.py", "chronicle_activity.py", "daily_analysis.py", "activity_episode_store.py",
+                 "task_corrections.py", "topic_allocation.py", "screen_context_tagging.py", "behavior_analysis.py", "project_paths.py",
+                 "window_topic_tagging.py", "vision_batch.py", "local_synthesis.py"):
+        digest.update(name.encode())
+        digest.update(Path(__file__).with_name(name).read_bytes())
+    if DB_PATH.is_file():
+        database = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+        try:
+            queries = (
+                ("events", "timestamp_utc>=? AND timestamp_utc<?", ((start - MAX_PHONE_SESSION).isoformat(), end.isoformat())),
+                ("screenshots", "timestamp_utc>=? AND timestamp_utc<?", (start.isoformat(), end.isoformat())),
+                ("vision_descriptions", "timestamp_utc>=? AND timestamp_utc<?", (start.isoformat(), end.isoformat())),
+                ("task_corrections", "day_local=?", (day.isoformat(),)),
+                ("task_outcomes", "day_local=?", (day.isoformat(),)),
+                ("project_file_events", "timestamp_utc>=? AND timestamp_utc<?", (start.isoformat(), end.isoformat())),
+                ("git_receipts", "committed_at_utc>=? AND committed_at_utc<?", (start.isoformat(), end.isoformat())),
+                ("calendar_items", "start_utc<? AND COALESCE(end_utc,start_utc)>=?", (end.isoformat(), start.isoformat())),
+            )
+            database.execute("BEGIN")
+            for table, condition, parameters in queries:
+                digest.update(table.encode())
+                try:
+                    for row in database.execute(f"SELECT * FROM {table} WHERE {condition} ORDER BY "
+                            + ("day_local" if table in {"task_corrections", "task_outcomes"} else
+                               "committed_at_utc" if table == "git_receipts" else
+                               "start_utc" if table == "calendar_items" else "timestamp_utc") + ",1", parameters):
+                        digest.update(json.dumps(row, ensure_ascii=False, separators=(",", ":")).encode())
+                        digest.update(b"\n")
+                except sqlite3.OperationalError:
+                    digest.update(b"missing_table")
+        finally:
+            database.close()
+    for name in ("window-topics", "screen-context", "screen-similarity"):
+        path = STATE_DIR / "analyses" / f"{name}-{day.isoformat()}.json"
+        digest.update(name.encode())
+        if path.is_file():
+            digest.update(path.read_bytes())
+    scope = STATE_DIR / "calendar-scope.json"
+    if scope.is_file():
+        digest.update(scope.read_bytes())
+    return digest.hexdigest()
+
+
 def refresh(*, now: datetime | None = None, recent_days: int = 8,
             force_backfill: bool = False) -> dict:
     now = now or datetime.now(timezone.utc)
@@ -310,9 +370,14 @@ def refresh(*, now: datetime | None = None, recent_days: int = 8,
     cursor = first
     while cursor <= today:
         path = DAYS / f"{cursor.isoformat()}.json"
+        cached = read_json(path)
+        dependencies = source_dependencies(cursor)
         if (force_backfill or not path.is_file() or cursor >= today - timedelta(days=recent_days)
-                or read_json(path).get("schema_version") != VERSION):
-            if private_write_if_changed(path, day_summary(cursor, now=now)):
+                or cached.get("schema_version") != VERSION
+                or cached.get("source_dependencies_sha256") != dependencies):
+            value = day_summary(cursor, now=now)
+            value["source_dependencies_sha256"] = dependencies
+            if private_write_if_changed(path, value):
                 days_written += 1
                 changed_months.add(cursor.strftime("%Y-%m"))
         cursor += timedelta(days=1)

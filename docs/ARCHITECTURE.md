@@ -25,6 +25,9 @@ flowchart LR
 | Enrichment | `project_activity.py`, `project_file_watch.py`, `index_screenshots.py`, `index_features.py` | Scoped metadata, OCR and visual fingerprints |
 | Storage | `secure_store.py`, `private_io.py` | Transactions, private atomic files and safe file descriptors |
 | Inference | `model_execution.py`, `vision_fallback.py`, `local_synthesis.py`, topic tagging modules | One local model at a time, bounded inputs, validated outputs |
+| Measurements | `inference_telemetry.py`, `telemetry_summary.py`, `engine_identity.py` | Private attempt histories, content-free counters and explicit metric scope |
+| Specialization | `specialization_dataset.py`, `specialization_training.py`, `specialization_worker.py`, `specialization_benchmark.py`, `specialization_study.py` | Frozen private inputs, bounded resident inference, resumable QLoRA and independent acceptance gates |
+| Evidence continuity | `activity_context.py`, `activity_episode_store.py`, `chronicle_activity.py` | Evidence-linked hypotheses and exact observed support; model allocation remains gated |
 | Scheduling | `overnight_schedule.py`, `overnight_text.py`, shell wrappers, `launchagents/` | Overnight stages and resource gates |
 | Accounting | `daily_analysis.py`, `daily_focus.py`, `behavior_analysis.py`, `topic_allocation.py`, `data_quality.py` | Interval joins, attribution and explicit coverage |
 | Presentation | `local_dashboard.py`, `dashboard_ui.py`, `dashboard_explore.py`, `dashboard_timeline.py`, `chronicle_rollup.py` | Private static HTML and historical rollups |
@@ -62,6 +65,8 @@ Collection is lightweight and continuous. Heavy inference is restricted to
 00:30–08:00 America/Chicago, with vision ending at 07:00. AC, storage, memory,
 load and remaining-time gates are checked between bounded model calls. Shared
 locks prevent overlapping model processes and survive a coordinator crash.
+The native launcher installs an exec-surviving deadline so an abandoned child
+cannot retain the model lock indefinitely.
 
 Receipts contain aggregate counters and stop reasons. Latest receipts can be
 replaced; completed overnight attempts also retain separate historical receipts.

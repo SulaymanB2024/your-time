@@ -20,6 +20,9 @@ from pathlib import Path
 
 from PIL import Image
 
+from activity_context import parse_result, raw_safety_checks
+from engine_identity import llama_identity
+from inference_telemetry import record_result
 from model_execution import run_model
 from private_io import atomic_write
 from secure_store import DB_PATH, STATE_DIR
@@ -100,6 +103,7 @@ def verify_models(labels: list[str]) -> dict:
         weights = next(path for name, path in files.items() if name.startswith("Qwen"))
         projector = next(path for name, path in files.items() if name.startswith("mmproj-F16"))
         models[label] = {"weights": weights, "projector": projector,
+                         "projector_sha256": next(item["sha256"] for item in manifest["files"] if item["name"] == projector.name),
                          "weights_sha256": next(item["sha256"] for item in manifest["files"] if item["name"] == weights.name)}
     return models
 
@@ -119,38 +123,78 @@ def current_ocr(path: Path) -> str | None:
 
 
 def run_image(path: Path, model: dict, *, timeout_seconds: int | None = None,
-              max_tokens: int = 1024) -> dict:
+              max_tokens: int = 1024, prompt: str = PROMPT,
+              prompt_version: str = PROMPT_VERSION, variant: str = "production",
+              image_side: int = 1600, image_tokens: int = 1024,
+              threads: int = 4, context: dict | None = None) -> dict:
+    if image_side not in {1024, 1600, 2048} or image_tokens not in {512, 1024, 1536} or threads not in {2, 4, 8}:
+        raise ValueError("Unsupported benchmark configuration")
     started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="quality-frame-", dir=STATE_DIR) as temp:
         os.chmod(temp, 0o700)
         png = Path(temp) / "frame.png"
         with Image.open(path) as source:
             reduced = source.convert("RGB")
-            reduced.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
+            reduced.thumbnail((image_side, image_side), Image.Resampling.LANCZOS)
             reduced.save(png)
+            width, height = reduced.size
         os.chmod(png, 0o600)
+        prompt_path = Path(temp) / "prompt.txt"
+        fd = os.open(prompt_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as stream:
+            stream.write(prompt)
+        prepare_seconds = time.monotonic() - started
         command = [
             "/usr/bin/sandbox-exec", "-f", str(SANDBOX_PROFILE), str(LLAMA_CLI),
             "-m", str(model["weights"]), "--mmproj", str(model["projector"]),
-            "--image", str(png), "-p", PROMPT, "-c", "4096", "-n", str(max_tokens),
-            "-ngl", "99", "-t", "4", "-tb", "4", "--image-max-tokens", "1024", "--temp", "0", "--jinja",
+            "--image", str(png), "-f", str(prompt_path), "-c", "4096", "-n", str(max_tokens),
+            "-ngl", "99", "-t", str(threads), "-tb", str(threads), "--image-max-tokens", str(image_tokens), "--temp", "0", "--jinja",
         ]
         # The manual quality comparison has no wall-clock cutoff. A scheduled
         # fallback can pass a bound so one frame cannot consume the entire night.
         try:
             completed = run_model(command, state_dir=STATE_DIR, capture_output=True,
                                        timeout=timeout_seconds,
+                                       telemetry={"stage": "vision", "variant": variant,
+                                                  "model_sha256": model.get("weights_sha256"),
+                                                  "input_sha256": sha256_file(path),
+                                                  "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
+                                                  "projector_sha256": model.get("projector_sha256"),
+                                                  "prompt_version": prompt_version,
+                                                  "engine_version": "llama.cpp-0.5.0",
+                                                  "engine_sha256": llama_identity(LLAMA_CLI),
+                                                  "image_prepare_seconds": prepare_seconds,
+                                                  "image_width": width, "image_height": height},
                                        env={"HOME": str(Path.home()),
                                             "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
                                             "LANG": "en_US.UTF-8"})
-        except subprocess.TimeoutExpired:
-            return {"status": "timeout", "elapsed_seconds": round(time.monotonic() - started, 2)}
+        except subprocess.TimeoutExpired as error:
+            return {"status": "timeout", "elapsed_seconds": round(time.monotonic() - started, 2),
+                    "telemetry_attempt_id": getattr(error, "telemetry_attempt_id", None)}
     if completed.returncode:
         return {"status": "model_error", "exit_code": completed.returncode,
-                "elapsed_seconds": round(time.monotonic() - started, 2)}
+                "elapsed_seconds": round(time.monotonic() - started, 2),
+                "telemetry_attempt_id": getattr(completed, "telemetry_attempt_id", None)}
+    safety = raw_safety_checks(completed.stdout)
+    if context is not None:
+        try:
+            activity = parse_result(completed.stdout, context)
+            status = "complete"
+        except json.JSONDecodeError:
+            activity, status = None, "decoding_error"
+        except ValueError:
+            activity, status = None, "schema_error"
+        attempt_id = getattr(completed, "telemetry_attempt_id", None)
+        record_result(STATE_DIR, attempt_id, status)
+        return {"status": status, "activity": activity,
+                "raw_safety_checks": safety,
+                "elapsed_seconds": round(time.monotonic() - started, 2), "telemetry_attempt_id": attempt_id}
     caption = clean_description(completed.stdout)
+    record_result(STATE_DIR, getattr(completed, "telemetry_attempt_id", None), "complete" if caption else "incomplete")
     return {"status": "complete" if caption else "incomplete",
-            "description": caption, "elapsed_seconds": round(time.monotonic() - started, 2)}
+            "raw_safety_checks": safety,
+            "description": caption, "elapsed_seconds": round(time.monotonic() - started, 2),
+            "telemetry_attempt_id": getattr(completed, "telemetry_attempt_id", None)}
 
 
 def proxies(description: str | None, ocr: str) -> dict:

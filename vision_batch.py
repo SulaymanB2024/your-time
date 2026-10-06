@@ -22,6 +22,8 @@ from zoneinfo import ZoneInfo
 
 from PIL import Image
 
+from engine_identity import llama_identity
+from inference_telemetry import record_result
 from model_execution import ModelBusy, run_model
 from overnight_schedule import VISION_END, VISION_SECONDS, in_window, remaining_seconds
 from private_io import open_private_file, prepare_directory, write_json
@@ -51,7 +53,7 @@ MAX_GENERATION_TOKENS = 2048  # Leave room for Qwen's thinking before the final 
 SENSITIVE_RE = re.compile(
     r"\b(password|passcode|verification code|one.time code|recovery key|"
     r"credit card|bank account|social security|api key|keychain|1password|"
-    r"bitwarden|dashlane|proton pass)\b",
+    r"bitwarden|dashlane|proton pass|suicid(?:e|al)|self.harm|kill myself|hurt myself)\b",
     re.IGNORECASE,
 )
 URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
@@ -220,6 +222,13 @@ def describe_image(path: Path, model: Path, projector: Path) -> tuple[str | None
         try:
             completed = run_model(
                 command, state_dir=STATE_DIR, capture_output=True, timeout=120,
+                telemetry={"stage": "vision", "prompt_version": PROMPT_VERSION,
+                           "engine_version": "llama.cpp-0.5.0",
+                           "engine_sha256": llama_identity(LLAMA_CLI),
+                           "input_sha256": sha256_file(path),
+                           "prompt_sha256": hashlib.sha256(PROMPT.encode()).hexdigest(),
+                           "image_prepare_seconds": time.monotonic() - started,
+                           "image_width": clean.width, "image_height": clean.height},
                 env={
                     "HOME": str(Path.home()),
                     "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
@@ -231,6 +240,7 @@ def describe_image(path: Path, model: Path, projector: Path) -> tuple[str | None
     if completed.returncode != 0:
         return None, "model_error", time.monotonic() - started
     description = clean_description(completed.stdout)
+    record_result(STATE_DIR, getattr(completed, "telemetry_attempt_id", None), "complete" if description else "incomplete")
     return description, "complete" if description else "incomplete", time.monotonic() - started
 
 

@@ -86,7 +86,7 @@ def test_model_prompt_is_private_file_not_process_argument(tmp_path, monkeypatch
         observed["prompt_mode"] = path and ( __import__("os").stat(path).st_mode & 0o777)
         observed["prompt_text"] = __import__("pathlib").Path(path).read_text()
         return __import__("types").SimpleNamespace(returncode=0, stdout=b'{"ok":true}')
-    monkeypatch.setattr(local_synthesis.subprocess, "run", fake_run)
+    monkeypatch.setattr(local_synthesis, "run_model", fake_run)
     result, _ = local_synthesis.model_call(tmp_path / "fake.gguf", "private window title",
                                            {"type": "object"})
     assert result == {"ok": True}
