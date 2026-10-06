@@ -3,20 +3,26 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import math
 import os
 import re
 import shutil
 import sqlite3
+import stat
 import statistics
 import subprocess
+from bisect import bisect_right
 from collections import Counter
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+from activity_context import metadata_identity
+from activity_episode_store import build_episodes, fingerprint, supports_anchor
 from behavior_analysis import build as build_behavior
 from chronicle_rollup import private_write_if_changed, work_artifacts
-from daily_analysis import ZONE, analyze
+from daily_analysis import ZONE, analyze, observed_mac_runs, union_seconds
 from data_quality import check_analysis
 from screen_context_tagging import allocate_visible_context, read_supported_tags
 from secure_store import DB_PATH, STATE_DIR
@@ -30,6 +36,177 @@ JOBS = (
     "project-file-watch", "project-git", "daily-analysis", "secure-text-analysis",
     "overnight-vision", "screen-storage-guard", "activity-dashboard-refresh",
 )
+
+
+def observed_frame_reach(episodes: list[dict], frames: list[dict]) -> dict:
+    """Measure conservative collector reach, never inferred task accuracy."""
+    def instant(value):
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            raise ValueError("Reach timestamps must be timezone-aware")
+        return parsed.astimezone(timezone.utc)
+
+    def bins(intervals):
+        result = set()
+        for lower, upper in intervals:
+            cursor = math.floor(lower.timestamp() / 1800)
+            while cursor * 1800 < upper.timestamp():
+                result.add(cursor)
+                cursor += 1
+        return result
+
+    starts = [instant(e["start_utc"]) for e in episodes]
+    foreground = [e for e in episodes if e["state"] in {"active", "unattributed"}]
+    all_intervals = [(instant(r["start_utc"]), instant(r["end_utc"]))
+                     for e in foreground for r in e["samples"]]
+    excluded, covered, seen, anchor_bins = Counter(), set(), set(), set()
+    intervals = []
+    valid = 0
+    for frame in frames:
+        if frame["observation_id"] in seen:
+            excluded["duplicate_observation"] += 1
+            continue
+        seen.add(frame["observation_id"])
+        if not frame.get("current_image_sha256"):
+            excluded["image_unavailable"] += 1
+            continue
+        if frame["current_image_sha256"] != frame["screenshot_sha256"]:
+            excluded["image_hash_changed"] += 1
+            continue
+        if (not frame.get("captured_at_utc")
+                or instant(frame["timestamp_utc"]) != instant(frame["captured_at_utc"])):
+            excluded["observation_timestamp_conflict"] += 1
+            continue
+        at = instant(frame["timestamp_utc"])
+        index = bisect_right(starts, at) - 1
+        episode = episodes[index] if index >= 0 else None
+        if (episode is None or episode["state"] not in {"active", "unattributed"}
+                or not supports_anchor(episode, at)):
+            excluded["no_foreground_anchor"] += 1
+            continue
+        if any(r["support_barrier"] for r in episode["samples"]):
+            excluded["support_barrier"] += 1
+            continue
+        if any(metadata_identity(r.get("app"), r.get("window")) !=
+               metadata_identity(frame.get("app"), frame.get("window"))
+               for r in episode["samples"]):
+            excluded["collector_metadata_conflict"] += 1
+            continue
+        lower, upper = at - timedelta(seconds=30), at + timedelta(seconds=30)
+        intervals.extend((max(lower, instant(r["start_utc"])), min(upper, instant(r["end_utc"])))
+                         for r in episode["samples"]
+                         if max(lower, instant(r["start_utc"])) < min(upper, instant(r["end_utc"])))
+        valid += 1
+        covered.add(episode["id"])
+        anchor_bins.add(math.floor(at.timestamp() / 1800))
+    observed_seconds, supported_seconds = union_seconds(all_intervals), union_seconds(intervals)
+    occupied, reached = bins(all_intervals), bins(intervals)
+    return {
+        "version": "production_observed_frame_reach_v3", "snapshot_bound": True,
+        "collector_snapshot_sha256": fingerprint(episodes),
+        "completed_anchor_snapshot_sha256": fingerprint(frames),
+        "completed_caption_records": len(frames),
+        "completed_unique_capture_observations": len(seen), "valid_metadata_consistent_anchors": valid,
+        "exclusion_scope": "input records; duplicate_observation counts surplus records",
+        "excluded": dict(excluded), "covered_collector_episodes": len(covered),
+        "foreground_collector_episodes": len(foreground),
+        "collector_episode_reach_fraction": len(covered) / len(foreground) if foreground else None,
+        "foreground_observed_seconds": observed_seconds, "anchor_support_union_seconds": supported_seconds,
+        "observed_support_reach_fraction": supported_seconds / observed_seconds if observed_seconds else None,
+        "foreground_half_hour_bins": len(occupied), "covered_half_hour_bins": len(reached),
+        "occupied_bin_reach_fraction": len(reached) / len(occupied) if occupied else None,
+        "bin_reach_scope": "covered_half_hour_bins uses observed support intervals around anchors",
+        "anchor_half_hour_bins": len(anchor_bins),
+        "occupied_anchor_bin_reach_fraction": len(anchor_bins) / len(occupied) if occupied else None,
+        "support_window_seconds_per_anchor": 60, "semantic_accuracy": None,
+        "accurately_described_task_episodes": None,
+        "scope": "Exact collector support around metadata-consistent anchors; not attention, semantic accuracy or task-time attribution.",
+        "observation_identity": "capture identity; identical image bytes at different timestamps remain separate observations",
+    }
+
+
+def production_frame_reach(receipt: dict, *, model_sha256: str, prompt_version: str,
+                           db_path: Path = DB_PATH,
+                           image_roots: tuple[Path, ...] = (STATE_DIR / "screenshots", STATE_DIR / "pensieve/screenshots")) -> dict:
+    """Bind one completed run and source day to a single read-only DB snapshot."""
+    if not receipt.get("finished_at_utc"):
+        return {"status": "pending", "reason": "run_not_finished"}
+    day = date.fromisoformat(receipt["day_local"])
+    lower = datetime.combine(day, datetime.min.time(), tzinfo=ZONE).astimezone(timezone.utc)
+    upper = datetime.combine(day + timedelta(days=1), datetime.min.time(), tzinfo=ZONE).astimezone(timezone.utc)
+    db = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        db.execute("BEGIN")
+        rows = [{"timestamp_utc": at, "source": source, "duration_seconds": seconds, "data": json.loads(data)}
+                for at, source, seconds, data in db.execute(
+                    "SELECT timestamp_utc,source,duration_seconds,data_json FROM events "
+                    "WHERE julianday(timestamp_utc)>=julianday(?) AND julianday(timestamp_utc)<julianday(?) "
+                    "ORDER BY julianday(timestamp_utc)", ((lower - timedelta(hours=6)).isoformat(), upper.isoformat()))]
+        frames = []
+        for path, at, digest, captured, app, window in db.execute(
+                "SELECT v.path,v.timestamp_utc,v.screenshot_sha256,s.timestamp_utc,s.active_app,s.active_window "
+                "FROM vision_descriptions v LEFT JOIN screenshots s ON s.path=v.path "
+                "WHERE v.model_sha256=? AND v.prompt_version=? AND v.status='complete' "
+                "AND julianday(v.timestamp_utc)>=julianday(?) AND julianday(v.timestamp_utc)<julianday(?) "
+                "AND julianday(v.updated_at_utc)>=julianday(?) AND julianday(v.updated_at_utc)<=julianday(?) "
+                "ORDER BY julianday(v.timestamp_utc),v.path",
+                (model_sha256, prompt_version, lower.isoformat(), upper.isoformat(),
+                 receipt["started_at_utc"], receipt["finished_at_utc"])):
+            current = private_image_digest(Path(path), image_roots)
+            frames.append({"observation_id": hashlib.sha256(path.encode()).hexdigest(),
+                           "timestamp_utc": at, "captured_at_utc": captured,
+                           "screenshot_sha256": digest, "current_image_sha256": current,
+                           "app": app, "window": window})
+        episodes = build_episodes(observed_mac_runs(rows, lower, upper), max_gap_seconds=2)
+        report = observed_frame_reach(episodes, frames)
+    finally:
+        db.close()
+    return {"status": "measured", "source_day": day.isoformat(),
+            "run_started_at_utc": receipt["started_at_utc"], "run_finished_at_utc": receipt["finished_at_utc"],
+            "run_receipt_sha256": fingerprint(receipt), "model_sha256": model_sha256,
+            "prompt_version": prompt_version, "reconstruction_limit": "Current caption rows updated within the run; immutable receipts remain authoritative for run totals.",
+            **report}
+
+
+def private_image_digest(path: Path, roots: tuple[Path, ...]) -> str | None:
+    """Hash only bounded private archive files; no symlinks or arbitrary DB paths."""
+    directory = None
+    try:
+        path = path.absolute()
+        if ".." in path.parts:
+            return None
+        root = next((root.absolute() for root in roots if path.is_relative_to(root.absolute())), None)
+        if root is None or ".." in root.parts:
+            return None
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
+        directory = os.open(root.anchor, flags)
+        for part in root.parts[1:] + path.relative_to(root).parts[:-1]:
+            child = os.open(part, flags, dir_fd=directory)
+            os.close(directory)
+            directory = child
+        fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK, dir_fd=directory)
+        with os.fdopen(fd, "rb") as source:
+            before = os.fstat(source.fileno())
+            if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.getuid()
+                    or before.st_nlink != 1 or before.st_mode & 0o077
+                    or not 0 < before.st_size <= 32 * 1024 * 1024):
+                return None
+            digest, amount = hashlib.sha256(), 0
+            while chunk := source.read(min(1024 * 1024, 32 * 1024 * 1024 + 1 - amount)):
+                amount += len(chunk)
+                if amount > 32 * 1024 * 1024:
+                    return None
+                digest.update(chunk)
+            after = os.fstat(source.fileno())
+            if (amount != before.st_size or (before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+                    != (after.st_size, after.st_mtime_ns, after.st_ctime_ns)):
+                return None
+            return digest.hexdigest()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    finally:
+        if directory is not None:
+            os.close(directory)
 
 
 def read_json(path: Path) -> dict:

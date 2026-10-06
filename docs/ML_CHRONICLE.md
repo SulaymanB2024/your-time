@@ -186,3 +186,26 @@ carry exact episode totals with the model gate closed. Historical refresh checks
 source/review/analysis content fingerprints, so old corrections, retractions and
 backfills refresh dependent periods. Existing inferred window/screen views remain
 alternative evidence views; they are not added to episode task totals.
+
+## Aggregate production reach audit
+
+`chronicle_audit.production_frame_reach(receipt, model_sha256=..., prompt_version=...)`
+reconstructs one completed run's captures on its declared source day from a single
+read-only SQLite snapshot. Model, prompt, capture day and update window are explicit
+filters. Current caption rows can be overwritten; this reconstruction does not
+replace immutable run receipts or establish historical completeness.
+
+The aggregate report counts distinct capture observations, rejects changed or
+unavailable images and capture/collector conflicts, and unions exact observed
+support within thirty seconds of each eligible anchor. Polling gaps, idle/locked
+time and support barriers receive no credit. Image checks use bounded reads of
+private archive files with descriptor-relative nonblocking opens; symlinks,
+nonregular files, hard links and unapproved paths are rejected.
+
+Collector episode reach, supported seconds and occupied half-hour bins measure
+different things. Support intervals can touch a neighboring bin; anchor-point bin
+reach is reported separately for comparison with the frozen shadow-trial metric.
+Identical image bytes at different capture times remain distinct observations;
+surplus records for one observation are counted separately. Reports expose only
+aggregates and source fingerprints. Semantic accuracy, attention and accurately
+described task episodes remain unmeasured by this audit.
