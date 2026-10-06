@@ -221,6 +221,9 @@ def observe(state_dir, *, max_seconds, interval=10, native=None):
         out = open_private_file(spool, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
         try:
             while time.monotonic() < deadline:
+                # Recheck wall time after sleep/wake or a clock adjustment.
+                if remaining_seconds(datetime.now(timezone.utc), end=VISION_END) <= 10:
+                    break
                 if job_root() != pid:
                     stop = "job_exited_or_changed"
                     break

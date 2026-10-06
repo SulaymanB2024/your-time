@@ -178,3 +178,12 @@ def test_partial_write_failure_retains_exact_bytes_hash_and_explicit_failure(tmp
     assert result["samples"] == 0 and result["sample_bytes"] == 13
     assert hashlib.sha256(spool.read_bytes()).hexdigest() == result["sample_sha256"]
     assert "PRIVATE PATH" not in json.dumps(result)
+
+
+def test_wake_after_clock_window_closes_does_not_resume_observation(tmp_path, monkeypatch):
+    controlled_clock(monkeypatch)
+    remaining = iter([100, 100, 0])
+    monkeypatch.setattr(observer, "remaining_seconds", lambda *a, **kw: next(remaining))
+    result = observer.observe(tmp_path, max_seconds=50, interval=1, native=FakeNative())
+    assert result["status"] == "complete" and result["stop_reason"] == "observer_deadline"
+    assert result["samples"] == 1 and result["elapsed_seconds"] == 1
