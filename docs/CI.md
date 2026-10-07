@@ -34,7 +34,9 @@ jobs:
       - run: uv sync --locked
       - run: make check
       - name: Synthetic dashboard benchmark
-        run: .venv/bin/python tools/benchmark_dashboard.py --segments 4000 --iterations 3
+        run: |
+          git fetch --depth=1 origin e34d43533bcd82fb9f9df307a1f7e08be6608f93
+          .venv/bin/python tools/benchmark_dashboard.py --segments 4000 --iterations 3 --baseline-ref e34d43533bcd82fb9f9df307a1f7e08be6608f93
 ```
 
 The workflow has a read-only token, no stored secrets, no privileged
@@ -44,3 +46,6 @@ advisory scanning and macOS permission readback remain separate checks.
 The dashboard benchmark uses fabricated intervals and prints timing aggregates;
 it never opens the private ledger or loads a model. Hosted runner timings do not
 establish performance on the user's Mac.
+The paired comparison fetches one reviewed public source revision, extracts only
+its calculation functions, and checks output equality before reporting speedup.
+It does not import the old collection controller or execute its top-level code.

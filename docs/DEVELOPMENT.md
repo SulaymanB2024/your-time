@@ -56,6 +56,11 @@ hashes; source syntax checks validate each script and the combined script.
 The benchmark generates synthetic intervals and measures only calculation time.
 It does not open the ledger or load a model. Compare identical inputs on the same
 machine and account for system load; it is not a model-throughput measurement.
+For a paired comparison, `--baseline-ref REVIEWED_REVISION` selects calculation
+functions from local Git history and checks output equality. Treat the revision
+as executable code: choose only reviewed repository source. The tool does not
+fetch source or import the old collector/controller; CI fetches its one pinned
+public source baseline separately.
 
 `make audit` is an optional dependency-advisory query. It sends package names
 and versions to public advisory services, with no activity data. Its result is
