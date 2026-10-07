@@ -2,7 +2,8 @@ import json
 import os
 import subprocess
 import sys
-from pathlib import Path
+
+from tools.repo_layout import source_file
 
 
 def synthetic_control(tmp_path):
@@ -11,8 +12,8 @@ def synthetic_control(tmp_path):
     home = tmp_path/'home'
     agents = home/'Library/LaunchAgents'
     agents.mkdir(parents=True)
-    labels = ('com.sulayman.secure-screen-record', 'com.sulayman.secure-mac-activity',
-              'com.sulayman.secure-window-reader')
+    labels = ('com.yourtime.secure-screen-record', 'com.yourtime.secure-mac-activity',
+              'com.yourtime.secure-window-reader')
     for label in labels:
         (agents/(label+'.plist')).write_text('synthetic installed agent')
     launchctl = commands/'launchctl'
@@ -41,7 +42,7 @@ p.write_text(json.dumps(d))
 
 def test_loaded_stopped_is_not_reported_as_running(tmp_path):
     _, env, labels = synthetic_control(tmp_path)
-    script = Path(__file__).resolve().parents[1] / 'capture_control.zsh'
+    script = source_file('capture_control.zsh')
     result = subprocess.run(['/bin/zsh', str(script), 'status'], env=env,
                             capture_output=True, text=True, timeout=5, check=True)
     assert labels[0]+' loaded_stopped' in result.stdout
@@ -50,7 +51,7 @@ def test_loaded_stopped_is_not_reported_as_running(tmp_path):
 
 def test_resume_kickstarts_loaded_stopped_job_without_interrupting_running_jobs(tmp_path):
     state, env, labels = synthetic_control(tmp_path)
-    script = Path(__file__).resolve().parents[1] / 'capture_control.zsh'
+    script = source_file('capture_control.zsh')
     subprocess.run(['/bin/zsh', str(script), 'resume'], env=env,
                    capture_output=True, text=True, timeout=5, check=True)
     data = json.loads(state.read_text())

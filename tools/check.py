@@ -10,8 +10,11 @@ import sys
 import tempfile
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+from repo_layout import REPO_ROOT, SOURCE_ROOT
+
+ROOT = REPO_ROOT
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(SOURCE_ROOT))
 
 
 def run(command: list[str]) -> None:
@@ -26,11 +29,15 @@ def check_source() -> None:
         ROOT_SOURCE_FILES,
         WEB_FILES,
         allowed,
+        published_path,
     )
 
-    candidates = {ROOT / name for name in CI_FILES | DOCS | JSON_FILES | ROOT_SOURCE_FILES | WEB_FILES}
+    candidates = {ROOT / (name if (ROOT / name).is_file() else published_path(name))
+                  for name in CI_FILES | DOCS | JSON_FILES | ROOT_SOURCE_FILES | WEB_FILES}
     for directory in ("tests", "launchagents", "native", "browser_extension", "tools"):
-        folder = ROOT / directory
+        folder = ROOT / published_path(directory + "/placeholder").rsplit("/", 1)[0]
+        if (ROOT / directory).is_dir():
+            folder = ROOT / directory
         if not folder.is_dir() or folder.is_symlink():
             raise RuntimeError("Registered source directory must not be linked")
         candidates.update(folder.iterdir())

@@ -87,7 +87,9 @@ reader binaries. Audits do not automatically upgrade dependencies.
 
 ## Public delivery
 
-Tests live under `tests/`, engineering documentation under `docs/`, and source
+Public workers live under `src/your_time/`, Mac templates under `macos/`, and
+optional integrations under `integrations/`. Tests live under `tests/`, engineering
+documentation under `docs/`, and source
 checks under `tools/`. See [architecture](ARCHITECTURE.md), the
-[security boundary](../SECURITY.md), and [source publication](../GITHUB.md).
+[security boundary](../SECURITY.md), and [source publication](PUBLISHING.md).
 The hosted source-only test workflow is described in [CI](CI.md).

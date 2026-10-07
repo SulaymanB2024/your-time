@@ -93,11 +93,11 @@ def test_invalid_subprocess_arguments_do_not_leave_a_running_attempt(tmp_path):
 
 def test_native_deadline_survives_coordinator_crash_and_releases_lock(tmp_path):
     import time
-    from pathlib import Path
 
     from model_execution import ModelBusy
+    from tools.repo_layout import SOURCE_ROOT
 
-    repo = Path(__file__).resolve().parent.parent
+    repo = SOURCE_ROOT
     signal_path = tmp_path/'child-started'
     child_code = "from pathlib import Path; import time; Path("+repr(str(signal_path))+").write_text('ready'); time.sleep(20)"
     coordinator_code = "from pathlib import Path; from model_execution import run_model; run_model("+repr([sys.executable, '-c', child_code])+", state_dir=Path("+repr(str(tmp_path))+"), timeout=1, capture_output=True)"

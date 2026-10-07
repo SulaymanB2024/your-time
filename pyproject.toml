@@ -20,11 +20,12 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]
+pythonpath = ["src/your_time", ".", "tools"]
 addopts = "--strict-markers --strict-config"
 
 [tool.ruff]
 target-version = "py311"
+src = [".", "src/your_time", "tools"]
 
 [tool.ruff.lint]
 select = ["E9", "F", "I"]

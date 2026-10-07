@@ -8,6 +8,7 @@ from publish_source import (
     SOURCE_REF,
     allowed,
     git,
+    published_path,
     source_commit,
     source_entries,
     source_tree,
@@ -51,7 +52,7 @@ def test_clean_snapshot_has_no_private_ancestry_and_preserves_checkout(tmp_path)
     tree = source_tree(repo, source_entries(repo))
     clean = source_commit(repo, tree)
     assert git(repo, 'rev-list', '--count', clean).strip() == b'1'
-    assert set(git(repo, 'ls-tree', '-r', '--name-only', clean).decode().splitlines()) == {'README.md', 'private_io.py'}
+    assert set(git(repo, 'ls-tree', '-r', '--name-only', clean).decode().splitlines()) == {'README.md', 'src/your_time/private_io.py'}
     assert git(repo, 'rev-parse', 'HEAD') == original
     assert (repo/'.git/index').read_bytes() == index
     assert git(repo, 'status', '--porcelain') == b''
@@ -138,6 +139,74 @@ def test_only_registered_dashboard_assets_are_publishable():
     assert all(allowed(path) for path in WEB_FILES)
     assert allowed('dashboard_assets.py') and allowed('dashboard_metrics.py')
     assert allowed('tools/benchmark_dashboard.py')
+
+
+def test_organized_export_is_idempotent_and_does_not_expose_root_runtime_files(tmp_path):
+    repo = fixture_repo(tmp_path)
+    (repo / 'README.md').write_text('Generic source guide')
+    (repo / 'private_io.py').write_text('print(1)')
+    (repo / 'publication_privacy.py').write_text('print(2)')
+    commit_files(repo)
+    first_tree = source_tree(repo, source_entries(repo))
+    published = source_commit(repo, first_tree)
+    assert source_tree(repo, source_entries(repo, published)) == first_tree
+    paths = git(repo, 'ls-tree', '-r', '--name-only', published).decode().splitlines()
+    assert paths == ['README.md', 'src/your_time/private_io.py', 'tools/publication_privacy.py']
+    assert published_path('native/Reader.m') == 'macos/native/Reader.m'
+    assert published_path('browser_extension/background.js') == 'integrations/browser_extension/background.js'
+
+
+def test_unknown_code_stays_excluded_in_organized_directories():
+    assert not allowed('src/your_time/unreviewed.py')
+    assert not allowed('src/your_time/activity.sqlite3')
+    assert not allowed('tools/publication_privacy.py/secret')
+
+
+def test_export_redacts_private_installation_data_in_body_and_filename(tmp_path):
+    repo = fixture_repo(tmp_path)
+    policy = {'version': 1, 'replacements': [
+        {'from': '/'.join(['', 'Users', 'private-person']), 'to': '/path/to/home', 'mode': 'literal'},
+        {'from': 'private-person', 'to': 'yourtime', 'mode': 'word'}]}
+    (repo / 'launchagents').mkdir()
+    (repo / 'launchagents/com.private-person.sample.plist').write_text('/'.join(['', 'Users', 'private-person', 'source']))
+    commit_files(repo)
+    entries = source_entries(repo, privacy_policy=policy)
+    tree = source_tree(repo, entries)
+    assert git(repo, 'ls-tree', '-r', '--name-only', tree).strip() == b'macos/launchagents/com.yourtime.sample.plist'
+    assert git(repo, 'show', tree + ':macos/launchagents/com.yourtime.sample.plist') == b'/path/to/home/source'
+
+
+def test_duplicate_installed_and_public_destinations_refuse_export(tmp_path):
+    repo = fixture_repo(tmp_path)
+    (repo / 'src/your_time').mkdir(parents=True)
+    (repo / 'private_io.py').write_text('print(1)')
+    (repo / 'src/your_time/private_io.py').write_text('print(2)')
+    commit_files(repo)
+    with pytest.raises(RuntimeError, match='Duplicate'):
+        source_entries(repo)
+
+
+def test_credentials_in_selected_filenames_refuse_export(tmp_path):
+    repo = fixture_repo(tmp_path)
+    (repo / 'launchagents').mkdir()
+    filename = 'gh' + 'p_' + 'x' * 40 + '.plist'
+    (repo / 'launchagents' / filename).write_text('ordinary source')
+    commit_files(repo)
+    with pytest.raises(RuntimeError, match='filename blocked'):
+        source_entries(repo)
+
+
+@pytest.mark.parametrize('path,body', [('private_io.py', 'private-person'),
+                                     ('launchagents/private-person.plist', 'ordinary source')])
+def test_redaction_cannot_introduce_credentials_in_body_or_filename(tmp_path, path, body):
+    repo = fixture_repo(tmp_path)
+    (repo / path).parent.mkdir(parents=True, exist_ok=True)
+    (repo / path).write_text(body)
+    commit_files(repo)
+    policy = {'version': 1, 'replacements': [
+        {'from': 'private-person', 'to': 'gh' + 'p_' + 'x' * 40, 'mode': 'word'}]}
+    with pytest.raises(RuntimeError, match='Redacted source blocked'):
+        source_entries(repo, privacy_policy=policy)
 
 
 @pytest.mark.parametrize('prefix,size', [('AK' + 'IA', 16), ('AI' + 'za', 35),

@@ -6,6 +6,7 @@ import sys
 import pytest
 
 from model_execution import ModelBusy, run_model
+from tools.repo_layout import source_file
 
 
 def test_busy_lock_prevents_a_second_process_and_releases_cleanly(tmp_path):
@@ -24,7 +25,7 @@ def test_busy_lock_prevents_a_second_process_and_releases_cleanly(tmp_path):
 def test_child_keeps_lock_after_coordinator_closes_its_descriptor(tmp_path):
     fd = os.open(tmp_path / "local-model-execution.lock", os.O_RDWR | os.O_CREAT, 0o600)
     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    profile = __import__("pathlib").Path(__file__).resolve().parents[1] / "network-off.sb"
+    profile = source_file("network-off.sb")
     child = subprocess.Popen(["/usr/bin/sandbox-exec", "-f", str(profile), sys.executable,
                               "-c", "import time; time.sleep(.5)"], pass_fds=(fd,))
     os.close(fd)

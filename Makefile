@@ -1,6 +1,7 @@
 PYTHON ?= .venv/bin/python
+PUBLISHER = $(firstword $(wildcard tools/publish_source.py publish_source.py))
 
-.PHONY: check test lint setup audit benchmark
+.PHONY: check test lint setup audit benchmark source-preview publish
 
 check:
 	$(PYTHON) tools/check.py
@@ -15,7 +16,13 @@ benchmark:
 	$(PYTHON) tools/benchmark_dashboard.py
 
 setup:
-	$(PYTHON) setup_check.py
+	$(PYTHON) $(firstword $(wildcard src/your_time/setup_check.py setup_check.py))
+
+source-preview:
+	$(PYTHON) $(PUBLISHER)
+
+publish:
+	$(PYTHON) $(PUBLISHER) --push
 
 # Queries public advisory metadata with package names/versions only.
 audit:

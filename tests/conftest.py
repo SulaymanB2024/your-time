@@ -10,8 +10,11 @@ from urllib.parse import unquote
 
 import pytest
 
+from tools.repo_layout import REPO_ROOT, SOURCE_ROOT
+
 _LIVE_LIBRARY = (Path.home() / "Library").resolve()
 _HOME_ENVIRONMENT = ("HOME", "CFFIXED_USER_HOME")
+_TEST_ENVIRONMENT = (*_HOME_ENVIRONMENT, "PYTHONPATH")
 _saved_environment: dict[str, str | None] = {}
 _test_home: tempfile.TemporaryDirectory | None = None
 _guard_enabled = False
@@ -40,9 +43,12 @@ sys.addaudithook(_guard_private_access)
 def pytest_configure(config) -> None:
     global _test_home, _guard_enabled
     _test_home = tempfile.TemporaryDirectory(prefix="your-time-test-home-")
-    for name in _HOME_ENVIRONMENT:
+    for name in _TEST_ENVIRONMENT:
         _saved_environment[name] = os.environ.get(name)
+    for name in _HOME_ENVIRONMENT:
         os.environ[name] = _test_home.name
+    # Synthetic subprocesses need the same reviewed modules as their parent.
+    os.environ["PYTHONPATH"] = os.pathsep.join(map(str, (SOURCE_ROOT, REPO_ROOT, REPO_ROOT / "tools")))
     # Runs before test modules import cached STATE_DIR/DB_PATH constants.
     _guard_enabled = True
 

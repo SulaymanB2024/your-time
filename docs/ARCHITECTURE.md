@@ -37,10 +37,12 @@ flowchart LR
 | Verification | `tests/`, `tools/check.py`, `setup_check.py`, `chronicle_audit.py` | Synthetic regression tests, installed state and aggregate accounting checks |
 | Publication | `publish_source.py` | Reviewed source snapshots with separate public ancestry |
 
-Runtime entry points remain in the root because installed LaunchAgents and
-signed readers refer to them. Tests and engineering guides have separate
-directories. A package migration must include launcher and signing migration;
-moving installed entry points casually would break collection or permissions.
+The public source tree groups workers and adjacent resources under
+`src/your_time/`, native readers and launch templates under `macos/`, and optional
+browser integration under `integrations/`. Publication utilities live in `tools/`;
+tests, frontend assets and guides retain dedicated folders. A path mapping and
+privacy gate produce this organized tree while the installed checkout retains
+its stable launcher paths and frozen experiment files.
 
 ### Dashboard source layout
 

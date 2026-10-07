@@ -14,7 +14,10 @@ from datetime import date, timedelta, timezone
 from datetime import time as clock_time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from repo_layout import REPO_ROOT, SOURCE_ROOT
+
+sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(SOURCE_ROOT))
 
 import dashboard_metrics
 from chronicle_rollup import local_boundaries
@@ -64,7 +67,7 @@ def baseline_functions(revision: str) -> dict:
     """Use calculation functions from an explicitly reviewed local Git revision."""
     if not re.fullmatch(r"[A-Za-z0-9_./~^{}-]{1,100}", revision) or revision.startswith("-"):
         raise ValueError("Invalid baseline revision")
-    for filename in ("dashboard_metrics.py", "local_dashboard.py"):
+    for filename in ("src/your_time/dashboard_metrics.py", "dashboard_metrics.py", "src/your_time/local_dashboard.py", "local_dashboard.py"):
         result = subprocess.run(["git", "show", f"{revision}:{filename}"],
                                 cwd=Path(__file__).resolve().parents[1],
                                 capture_output=True, text=True, timeout=10)

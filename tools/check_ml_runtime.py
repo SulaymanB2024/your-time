@@ -4,9 +4,11 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from repo_layout import REPO_ROOT, SOURCE_ROOT
+
+sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(SOURCE_ROOT))
 
 
 def check(model_path: str) -> dict:

@@ -16,16 +16,17 @@ applying the 500-commit per-store bound. Unreadable ref tips are counted while
 valid history remains readable. Truncated histories and unreadable tips make
 the scan explicitly partial; they are not a claim of complete project history.
 
-This is the installed configuration for one Apple Silicon Mac. It runs locally,
+This is an activity chronicle for Apple Silicon Macs. It runs locally,
 without a web server, cloud inference, automatic uploads or paid services.
-The public source repository contains no recorded activity or model weights.
+The current source export excludes recorded activity and model weights.
+Historical public refs require a separate privacy review.
 
 ## Engineering guides
 
 - [Architecture and module boundaries](docs/ARCHITECTURE.md)
 - [Development and verification](docs/DEVELOPMENT.md)
 - [Security and remaining limits](SECURITY.md)
-- [Source publication](GITHUB.md)
+- [Source publication](docs/PUBLISHING.md)
 - [Hosted source checks](docs/CI.md)
 
 ## What runs
@@ -73,18 +74,18 @@ Do not publish or upload the generated HTML.
 
 ## Runtime and permissions
 
-Source: `/Users/sulaymanbowles/Projects/personal-activity-ledger`.
-Data: `~/Library/Application Support/personal-activity-ledger`.
+Configure the checkout and private data directory locally. Keep recorded data,
+model weights, installation settings and runtime receipts outside this repository.
 Dependencies are locked in `uv.lock` for Python 3.11 and macOS; recreate the
 Python environment with `uv sync --locked` when intentionally restoring it.
 
-LaunchAgent templates and wrappers contain this Mac's absolute paths. A clone
-is source, not a portable one-command installer. A different Mac requires path
+Public LaunchAgent templates and wrappers use placeholder installation paths.
+A clone is source, not a portable one-command installer. Installation requires path
 configuration, native builds and explicit macOS grants. Do not bulk load the
 optional agents or grant permissions to the shared Python interpreter.
 
-- `/Applications/YourTimeWindowReader.app` is locally signed and has Accessibility
-  access. The Python sampler consumes only a fresh record from the same process.
+- `/Applications/YourTimeWindowReader.app` requires local signing and an explicit Accessibility
+  grant. The Python sampler consumes only a fresh record from the same process.
 - Capture has the existing Screen Recording grant.
 - `/Applications/PhoneActivityReader.app` is the dedicated signed Full Disk Access
   reader. Screen Time sharing supplies Apple's local sync records.
@@ -99,8 +100,8 @@ optional agents or grant permissions to the shared Python interpreter.
   selected-list allowlist before importing anything.
 
 Collectors, OCR and model jobs run with a minimal environment under
-`network-off.sb`. FileVault is enabled; runtime directories and files are
-user-only. Stock ActivityWatch and Pensieve servers remain disabled. See
+`network-off.sb`. Enable FileVault for disk protection and keep runtime directories
+and files user-only. Avoid exposing unauthenticated activity services. See
 [SECURITY.md](SECURITY.md) for controls and limits.
 
 ## Overnight model analysis
@@ -110,7 +111,7 @@ The active model is pinned **Qwen3.5-9B Q8**, with an F16 vision projector, in
 `llama-completion` 0.5.0 use Metal. There is no model HTTP server. Weights are
 read-only under the private data root, outside Git.
 
-`com.sulayman.overnight-vision` starts at 00:30 and retries every half hour
+`com.yourtime.overnight-vision` starts at 00:30 and retries every half hour
 through 06:30. It calls the 9B worker through the legacy-named
 `secure_vision_fallback.zsh`; **9B is the primary pass** and does not require a
 2B caption. The 2B code is retained for manual comparison only. The removed

@@ -3,7 +3,11 @@
 The archive contains screen images, OCR text, app names, URLs in older
 Pensieve images, and iPhone use times. Treat the entire data root as sensitive.
 
-## Controls in effect
+## Required controls
+
+This describes the security design, not any person's installation status.
+Keep permission grants, runtime state, private evaluations and audit receipts
+outside Git. Verify each installation locally before recording private activity.
 
 - FileVault protects the disk while the Mac is powered off. The login lock
   limits interactive access, but running same-user processes remain a risk.
@@ -64,12 +68,11 @@ Pensieve images, and iPhone use times. Treat the entire data root as sensitive.
   It embeds aggregate and activity-context data but no raw screenshots or OCR,
   loads no external assets, and blocks network requests with a content security
   policy. It exposes no listener.
-- The phone reader is a dedicated ad-hoc-signed app with a verified bundle
-  signature. The user granted it Full Disk Access after an exact-scope prompt;
-  its hourly launchd job is network-blocked and has been verified live.
-- A separate one-time signed backfill build read older plausible Apple sync
-  intervals under the network-denying sandbox. It did not replace or expand
-  the hourly reader's permissions. Its runtime build is a temporary artifact.
+- Use a dedicated signed phone reader and verify its bundle signature. Grant
+  Full Disk Access only to the exact reader after explicit approval; keep its
+  hourly job network-blocked.
+- Backfill must use a separate bounded reader under the network-denying sandbox
+  without expanding the hourly reader's permissions. Keep its output private.
 
 ## Why the stock servers remain off
 
