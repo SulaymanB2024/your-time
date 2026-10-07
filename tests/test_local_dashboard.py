@@ -179,7 +179,9 @@ def test_partial_summary_uses_current_support_and_stays_explicitly_partial(monke
         "day_prompt_version": DAY_PROMPT_VERSION, "day_input_sha256": summary_fingerprint([row]),
         "summary_evidence_ids": ["supported"], "summary_scope": "selected_observed_chapters",
         "themes": [{"label": "Writing", "summary": "Drafting appears in the selected chapter",
-                    "evidence_ids": ["supported"]}], "candidate_outcomes": []}
+                    "evidence_ids": ["supported"]}], "candidate_outcomes": [],
+        "coverage": {"summary_input_blocks": 20, "summary_input_seconds": 9000,
+                     "summary_cited_blocks": 9, "summary_cited_seconds": 4000}}
     monkeypatch.setattr(local_dashboard, "analyze", lambda *_args, **_kwargs: analysis)
     monkeypatch.setattr(local_dashboard, "focus_build", lambda *_args, **_kwargs: {"blocks": [block, pending]})
     monkeypatch.setattr(local_dashboard, "read_json", lambda path: synthesis if path.name.startswith("synthesis-") else {})
@@ -194,15 +196,23 @@ def test_partial_summary_uses_current_support_and_stays_explicitly_partial(monke
     assert item["themes"] == synthesis["themes"] and item["summary_evidence_blocks"] == 1
     assert item["summary_scope"] == "selected_observed_chapters"
     assert item["verified_accomplishments"] == []
+    assert item["synthesis_coverage"]["summary_input_blocks"] == 1
+    assert item["synthesis_coverage"]["summary_cited_blocks"] == 1
+    assert item["synthesis_coverage"]["summary_input_seconds"] == 5
+    assert item["synthesis_coverage"]["summary_cited_seconds"] == 5
     synthesis["status"] = "complete"
     synthesis["blocks"].append({"block_id": "pending", "status": "insufficient_context",
         "input_sha256": fingerprint(block_projection(pending))})
     synthesis["day_input_sha256"] = "invalid-summary-fingerprint"
     corrupt = local_dashboard.daily_snapshot(datetime(2026, 10, 3).date(), datetime(2026, 10, 4, tzinfo=timezone.utc))
     assert corrupt["themes"] == []
+    assert all(corrupt["synthesis_coverage"][key] == 0 for key in
+               ("summary_input_blocks", "summary_input_seconds", "summary_cited_blocks", "summary_cited_seconds"))
     synthesis["status"] = "partial"
     synthesis["day_input_sha256"] = summary_fingerprint([row])
     synthesis["blocks"].pop()
     block["top_windows"] = [{"title": "Changed context", "sampled_seconds": 5}]
     changed = local_dashboard.daily_snapshot(datetime(2026, 10, 3).date(), datetime(2026, 10, 4, tzinfo=timezone.utc))
     assert changed["themes"] == [] and changed["synthesis_status"] == "stale_evidence"
+    assert all(changed["synthesis_coverage"][key] == 0 for key in
+               ("summary_input_blocks", "summary_input_seconds", "summary_cited_blocks", "summary_cited_seconds"))

@@ -20,6 +20,9 @@ from daily_analysis import ANALYSIS_DIR, ZONE, analyze, private_write
 from local_synthesis import (
     LOCK,
     MODEL_MANIFEST,
+    ValidatedTagBatch,
+    failure_code,
+    mark_output,
     model_call,
     read_json_file,
     safe_input_text,
@@ -138,24 +141,29 @@ def validate_batch(value: dict, rows: list[dict]) -> list[dict]:
         raise ValueError("Invalid topic batch")
     allowed = {row["id"]: row for row in rows}
     output = {}
+    filtered = False
     for item in value["tags"]:
         if not isinstance(item, dict) or set(item) != {"id", "topic", "evidence_word"}:
+            filtered = True
             continue
         identity = item["id"]
         if not isinstance(identity, str) or identity not in allowed or identity in output:
+            filtered = True
             continue
         try:
             topic = validate_text(item["topic"], 65)
             evidence_word = validate_text(item["evidence_word"], 60)
         except ValueError:
+            filtered = True
             topic = "Unclear"
             evidence_word = ""
         if not supported_topic(topic, evidence_word, allowed[identity]):
+            filtered |= topic.casefold() != "unclear"
             topic = "Unclear"
         output[identity] = {"id": identity, "topic": topic,
                             "status": "model_inference" if topic != "Unclear" else "unclassified"}
-    return [output.get(row["id"], {"id": row["id"], "topic": "Unclear",
-                                   "status": "model_failed"}) for row in rows]
+    return ValidatedTagBatch([output.get(row["id"], {"id": row["id"], "topic": "Unclear",
+                                   "status": "model_failed"}) for row in rows], filtered=filtered)
 
 
 def run_day(day, model: Path, model_sha: str, *, allow_battery: bool = False,
@@ -200,14 +208,18 @@ def run_day(day, model: Path, model_sha: str, *, allow_battery: bool = False,
             stop_reason = gate
             break
         batch = pending[offset:offset + BATCH_SIZE]
+        output = None
         try:
             batch_rows = [row for row, _ in batch]
-            result, _ = model_call(model, prompt(batch_rows), batch_schema(batch_rows))
-            accepted = validate_batch(result, [row for row, _ in batch])
+            output, _ = model_call(model, prompt(batch_rows), batch_schema(batch_rows),
+                                   telemetry_variant="window_topics", telemetry_prompt_version=VERSION)
+            accepted = validate_batch(output, batch_rows)
+            mark_output(output, accepted.telemetry_status)
         except ModelBusy:
             stop_reason = "local_model_busy"
             break
-        except (ValueError, RuntimeError, subprocess.TimeoutExpired):
+        except (ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
+            mark_output(output, failure_code(error))
             accepted = [{"id": row["id"], "topic": "Unclear", "status": "model_failed"}
                         for row, _ in batch]
         for accepted_row, (row, digest) in zip(accepted, batch):

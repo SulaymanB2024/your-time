@@ -19,6 +19,9 @@ from pathlib import Path
 from daily_analysis import ANALYSIS_DIR, ZONE, analyze, private_write
 from local_synthesis import (
     LOCK,
+    ValidatedTagBatch,
+    failure_code,
+    mark_output,
     model_call,
     read_json_file,
     safe_input_text,
@@ -123,16 +126,20 @@ def validate_batch(value: dict, rows: list[dict]) -> list[dict]:
         raise ValueError("Invalid screen-context batch")
     allowed = {item["id"]: item for item in rows}
     result = {}
+    filtered = False
     for item in value["tags"]:
         if not isinstance(item, dict) or set(item) != {"id", "topic", "evidence_word"}:
+            filtered = True
             continue
         identity = item["id"]
         if not isinstance(identity, str) or identity not in allowed or identity in result:
+            filtered = True
             continue
         try:
             topic = validate_text(item["topic"], 65)
             evidence = validate_text(item["evidence_word"], 60)
         except ValueError:
+            filtered = True
             topic, evidence = "Unclear", ""
         source = (allowed[identity]["ocr"] + " " + allowed[identity]["strong_caption"]).casefold()
         tokens = {word for word in re.findall(r"[a-z0-9]{3,}", topic.casefold()) if word not in GENERIC}
@@ -140,11 +147,13 @@ def validate_batch(value: dict, rows: list[dict]) -> list[dict]:
         supported = (len(evidence) >= 3 and evidence.casefold() in source
                      and bool(tokens & source_tokens))
         if topic.casefold() == "unclear" or not supported:
+            filtered |= topic.casefold() != "unclear"
             topic = "Unclear"
         result[identity] = {"topic": topic,
                             "status": "model_inference" if topic != "Unclear" else "unclassified"}
-    return [{"id": row["id"], **result.get(row["id"], {"topic": "Unclear", "status": "model_failed"})}
-            for row in rows]
+    return ValidatedTagBatch([
+        {"id": row["id"], **result.get(row["id"], {"topic": "Unclear", "status": "model_failed"})}
+        for row in rows], filtered=filtered)
 
 
 def run_day(day, model, model_sha, *, limit: int = MAX_PER_DAY,
@@ -192,14 +201,18 @@ def run_day(day, model, model_sha, *, limit: int = MAX_PER_DAY,
             stop_reason = gate or "vision_worker_busy"
             break
         batch = pending[offset:offset + BATCH_SIZE]
+        output = None
         try:
             batch_rows = [row for row, _ in batch]
-            value, _ = model_call(model, prompt(batch_rows), batch_schema(batch_rows))
-            accepted = validate_batch(value, [row for row, _ in batch])
+            output, _ = model_call(model, prompt(batch_rows), batch_schema(batch_rows),
+                                   telemetry_variant="screen_context", telemetry_prompt_version=VERSION)
+            accepted = validate_batch(output, batch_rows)
+            mark_output(output, accepted.telemetry_status)
         except ModelBusy:
             stop_reason = "local_model_busy"
             break
-        except (ValueError, RuntimeError, subprocess.TimeoutExpired):
+        except (ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
+            mark_output(output, failure_code(error))
             accepted = [{"id": row["id"], "topic": "Unclear", "status": "model_failed"}
                         for row, _ in batch]
         for result, (row, digest) in zip(accepted, batch):

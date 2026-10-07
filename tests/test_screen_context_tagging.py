@@ -57,7 +57,7 @@ def test_selection_change_retains_prior_supported_frame(monkeypatch):
     monkeypatch.setattr(screen_context_tagging, "private_write", lambda path, body: saved.append(json.loads(body)))
     monkeypatch.setattr(screen_context_tagging, "resource_gate", lambda benchmark_now: None)
     monkeypatch.setattr(screen_context_tagging, "vision_busy", lambda: False)
-    monkeypatch.setattr(screen_context_tagging, "model_call", lambda model, prompt, schema: (
+    monkeypatch.setattr(screen_context_tagging, "model_call", lambda model, prompt, schema, **kwargs: (
         {"tags": [{"id": "new", "topic": "SEO planning", "evidence_word": "planning"}]}, 1))
     result = screen_context_tagging.run_day(day, None, "model")
     assert result["status"] == "complete" and result["tagged"] == 1
@@ -115,7 +115,7 @@ def test_old_unclear_cache_is_revisited_with_new_id_constraints(monkeypatch):
     monkeypatch.setattr(screen_context_tagging, "private_write", lambda *_: None)
     monkeypatch.setattr(screen_context_tagging, "resource_gate", lambda **_: None)
     monkeypatch.setattr(screen_context_tagging, "vision_busy", lambda: False)
-    monkeypatch.setattr(screen_context_tagging, "model_call", lambda *_: (
+    monkeypatch.setattr(screen_context_tagging, "model_call", lambda *_, **kwargs: (
         {"tags": [{"id": "one", "topic": "SEO report", "evidence_word": "report"}]}, 1))
     result = screen_context_tagging.run_day(day, None, "model")
     assert result["processed_this_run"] == 1

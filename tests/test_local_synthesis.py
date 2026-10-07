@@ -98,6 +98,40 @@ def test_model_prompt_is_private_file_not_process_argument(tmp_path, monkeypatch
     assert not __import__("pathlib").Path(observed["command"][observed["command"].index("-f", 4) + 1]).exists()
 
 
+@pytest.mark.parametrize("variant,version", [("window_topics", "window_topics_v3"),
+                                            ("screen_context", "screen_context_v2")])
+def test_shared_text_call_records_caller_identity_without_changing_decoding(tmp_path, monkeypatch, variant, version):
+    from types import SimpleNamespace
+
+    from inference_telemetry import Attempt
+
+    monkeypatch.setattr(local_synthesis, "STATE_DIR", tmp_path)
+    identities = []
+    def synthetic_run(command, **kwargs):
+        attempt = Attempt(tmp_path, command, kwargs["telemetry"])
+        attempt.finish("complete", returncode=0)
+        identities.append(attempt.identity)
+        return SimpleNamespace(returncode=0, stdout=b'{"tags":[]}', telemetry_attempt_id=attempt.identity)
+    monkeypatch.setattr(local_synthesis, "run_model", synthetic_run)
+    local_synthesis.model_call(tmp_path / "fake.gguf", "Synthetic tagging input", {"type": "object"},
+                               telemetry_variant=variant, telemetry_prompt_version=version)
+    saved = json.loads((tmp_path / "inference-attempts" / (identities[0] + ".json")).read_text())
+    assert saved["context"]["variant"] == variant
+    assert saved["context"]["prompt_version"] == version
+    assert saved["configuration"]["-n"] == 768
+    assert "result_status" not in saved  # The caller's validator supplies this.
+    assert "Synthetic tagging input" not in json.dumps(saved)
+
+
+@pytest.mark.parametrize("variant,version", [("private arbitrary label", "v1"),
+                                            ("chapter", "private window title")])
+def test_unbounded_telemetry_identity_refuses_before_model_execution(tmp_path, monkeypatch, variant, version):
+    monkeypatch.setattr(local_synthesis, "run_model", lambda *args, **kwargs: pytest.fail("model must not run"))
+    with pytest.raises(ValueError, match="Invalid text telemetry identity"):
+        local_synthesis.model_call(tmp_path / "fake.gguf", "Synthetic input", {},
+                                   telemetry_variant=variant, telemetry_prompt_version=version)
+
+
 def test_short_legacy_chapter_is_retained_without_model_call(tmp_path, monkeypatch):
     monkeypatch.setattr(local_synthesis, "ANALYSIS_DIR", tmp_path)
     monkeypatch.setattr(local_synthesis, "resource_gate", lambda **_: None)

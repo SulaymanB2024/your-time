@@ -165,6 +165,15 @@ class TextModelOutput(dict):
         self.telemetry_attempt_id = attempt_id
 
 
+class ValidatedTagBatch(list):
+    """Keep filtering disposition separate from normalized, persisted labels."""
+
+    def __init__(self, rows: list[dict], *, filtered: bool):
+        super().__init__(rows)
+        self.telemetry_status = ("partial_batch" if any(row["status"] == "model_failed" for row in rows)
+                                 else "filtered_batch" if filtered else "complete")
+
+
 def failure_code(error: Exception) -> str:
     """Return fixed diagnostic labels; never retain arbitrary exception text."""
     if isinstance(error, subprocess.TimeoutExpired):
@@ -184,7 +193,15 @@ def mark_output(output, status):
     record_result(STATE_DIR, getattr(output, "telemetry_attempt_id", None), status)
 
 
-def model_call(model: Path, prompt: str, schema: dict) -> tuple[dict, float]:
+def model_call(model: Path, prompt: str, schema: dict, *,
+               telemetry_variant: str | None = None,
+               telemetry_prompt_version: str | None = None) -> tuple[dict, float]:
+    summary = "themes" in schema.get("properties", {})
+    variant = telemetry_variant or ("day_summary" if summary else "chapter")
+    version = telemetry_prompt_version or (DAY_PROMPT_VERSION if summary else PROMPT_VERSION)
+    if (variant not in {"day_summary", "chapter", "window_topics", "screen_context"}
+            or not isinstance(version, str) or not re.fullmatch(r"[a-zA-Z0-9_.-]{1,80}", version)):
+        raise ValueError("Invalid text telemetry identity")
     started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="private-text-prompt-", dir=STATE_DIR) as temporary:
         os.chmod(temporary, 0o700)
@@ -192,15 +209,14 @@ def model_call(model: Path, prompt: str, schema: dict) -> tuple[dict, float]:
         fd = os.open(prompt_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as output:
             output.write(prompt)
-        summary = "themes" in schema.get("properties", {})
         max_tokens = DAY_MAX_TOKENS if summary else 768
         command = ["/usr/bin/sandbox-exec", "-f", str(SANDBOX), str(LLAMA_COMPLETION),
                    "-m", str(model), "-f", str(prompt_path), "-c", "4096", "-n", str(max_tokens),
                    "-ngl", "99", "-t", "4", "-tb", "4", "--temp", "0", "-j", json.dumps(schema),
                    "--no-display-prompt", "--offline", "--perf", "--simple-io"]
         result = run_model(command, state_dir=STATE_DIR, capture_output=True, timeout=MAX_CALL_SECONDS,
-                                telemetry={"stage": "text", "variant": "day_summary" if summary else "chapter",
-                                           "prompt_version": DAY_PROMPT_VERSION if summary else PROMPT_VERSION,
+                                telemetry={"stage": "text", "variant": variant,
+                                           "prompt_version": version,
                                            "input_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
                                            "model_sha256": next((item["sha256"] for item in json.loads(MODEL_MANIFEST.read_text())["files"] if item["name"] == model.name and model.parent == MODEL_DIR), None),
                                            "engine_version": "llama.cpp-0.5.0",

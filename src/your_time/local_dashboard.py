@@ -155,9 +155,16 @@ def daily_snapshot(day, now: datetime) -> dict:
             complete_seconds=round(sum(block["sampled_seconds"] for block in focus["blocks"]
                                        if block["id"] in inferred), 1))
         supported_ids = set(synthesis.get("summary_evidence_ids", [])) if summary_current else set()
+        cited_ids = {identity for item in synthesis.get("themes", []) + synthesis.get("candidate_outcomes", [])
+                     for identity in item.get("evidence_ids", [])} & supported_ids
+        input_seconds = round(sum(block["sampled_seconds"] for block in focus["blocks"]
+                                  if block["id"] in supported_ids), 1)
         synthesis_coverage.update(summary_evidence_blocks=len(supported_ids),
-            summary_evidence_seconds=round(sum(block["sampled_seconds"] for block in focus["blocks"]
-                                               if block["id"] in supported_ids), 1))
+            summary_evidence_seconds=input_seconds,
+            summary_input_blocks=len(supported_ids), summary_input_seconds=input_seconds,
+            summary_cited_blocks=len(cited_ids),
+            summary_cited_seconds=round(sum(block["sampled_seconds"] for block in focus["blocks"]
+                                           if block["id"] in cited_ids), 1))
     blocks = []
     categories = Counter()
     for block in focus["blocks"]:
