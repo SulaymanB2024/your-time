@@ -58,6 +58,11 @@ def rules(policy: dict) -> list[tuple[re.Pattern, bytes]]:
     return result
 
 
+def normalized_text(body: bytes) -> bytes:
+    """Expose percent-encoded and JSON slash-escaped text to publication checks."""
+    return unquote_to_bytes(body.replace(b"\\/", b"/"))
+
+
 def public_text(body: bytes, policy: dict) -> bytes:
     """Redact explicit private identifiers, then refuse remaining personal paths/contact data."""
     compiled = rules(policy)
@@ -65,7 +70,7 @@ def public_text(body: bytes, policy: dict) -> bytes:
         body = pattern.sub(lambda _: replacement, body)
         if len(body) > 2 * 1024**2:
             raise ValueError("Redacted public source is oversized")
-    normalized = unquote_to_bytes(body.replace(b"\\/", b"/"))
+    normalized = normalized_text(body)
     if HOME_PATH.search(normalized):
         raise ValueError("Public source contains a concrete personal home path")
     if any(email.rsplit(b"@", 1)[1].lower() not in EXAMPLE_DOMAINS

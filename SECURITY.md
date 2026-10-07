@@ -116,7 +116,7 @@ Generated HTML, database files, images, OCR, captions, model weights, runtime
 receipts and private review documents remain local. The initial source commit
 has no ancestry from the local historical working branch; subsequent exports
 have only published source parents. Default pushing is disabled on the working
-checkout. See [GITHUB.md](GITHUB.md). Ignore rules and pattern checks are a
+checkout. See [publication guide](docs/PUBLISHING.md). Ignore rules and pattern checks are a
 publication guard, not encryption or a substitute for source review.
 
 Root modules are explicitly registered; arbitrary new Python or TOML files are

@@ -11,7 +11,7 @@ import sys
 import tempfile
 from pathlib import Path, PurePosixPath
 
-from publication_privacy import load_policy, public_text
+from publication_privacy import load_policy, normalized_text, public_text
 
 REPOSITORY = 'SulaymanB2024/your-time'
 REMOTE = f'https://github.com/{REPOSITORY}.git'
@@ -194,18 +194,18 @@ def source_entries(repo: Path, revision: str = 'HEAD', *, privacy_policy: dict |
         path = raw_path.decode('utf-8')
         if not allowed(path):
             continue
-        if SECRETS.search(raw_path):
+        if SECRETS.search(normalized_text(raw_path)):
             raise RuntimeError('Source filename blocked by credential/image check')
         mode, kind, oid = metadata.split()
         if mode not in (b'100644', b'100755') or kind != b'blob':
             raise RuntimeError('Source export rejects links and non-file entries')
         body = git(repo, 'cat-file', 'blob', oid.decode())
-        if len(body) > 2 * 1024**2 or b'\0' in body or SECRETS.search(body):
+        if len(body) > 2 * 1024**2 or b'\0' in body or SECRETS.search(normalized_text(body)):
             raise RuntimeError('Source export blocked by binary/credential/image check')
         body.decode('utf-8')
         cleaned = public_text(body, policy)
         destination = public_text(published_path(path).encode(), policy)
-        if SECRETS.search(cleaned) or SECRETS.search(destination):
+        if SECRETS.search(normalized_text(cleaned)) or SECRETS.search(normalized_text(destination)):
             raise RuntimeError('Redacted source blocked by credential/image check')
         item = PurePosixPath(destination.decode())
         if item.is_absolute() or '..' in item.parts or not allowed(destination.decode()):

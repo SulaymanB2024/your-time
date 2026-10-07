@@ -72,7 +72,7 @@ cleanup. Publication never force-pushes or silently rewrites history.
 
 The repository creates no hosted dashboard, cloud inference, recurring
 publisher or paid CI jobs. Runtime data remains exclusively on the Mac.
-The user approved source-only hosted CI; see [docs/CI.md](docs/CI.md). Publication
+The user approved source-only hosted CI; see [CI.md](CI.md). Publication
 requires GitHub workflow permission, and a passing hosted run must be checked
 separately. The user also approved enabling this public repository's
 secret-scanning alerts, secret push protection, vulnerability alerts and

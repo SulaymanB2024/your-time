@@ -81,6 +81,21 @@ def test_credentials_in_selected_source_block_publication(tmp_path):
         source_entries(repo)
 
 
+@pytest.mark.parametrize('target', ['body', 'filename'])
+def test_percent_encoded_credentials_cannot_bypass_export_checks(tmp_path, target):
+    repo = fixture_repo(tmp_path)
+    token = 'gh' + 'p_' + 'x'*40
+    encoded = ''.join('%' + format(ord(char), '02X') for char in token)
+    if target == 'body':
+        (repo/'README.md').write_text(encoded)
+    else:
+        (repo/'tests').mkdir()
+        (repo/'tests'/('test_' + encoded + '.py')).write_text('pass\n')
+    commit_files(repo)
+    with pytest.raises(RuntimeError, match='credential'):
+        source_entries(repo)
+
+
 def test_push_guard_rejects_private_ancestry_and_extra_refs(tmp_path):
     repo = fixture_repo(tmp_path)
     (repo/'README.md').write_text('Source')

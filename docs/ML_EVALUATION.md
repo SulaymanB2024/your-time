@@ -28,10 +28,10 @@ API, `DATA_ROOT/sealed/test.jsonl`. Rows require real source class, a unique ID,
 one image path and SHA-256, context, episode ID, split, and user/assistant messages.
 The assistant message is the coordinator-reviewed reference JSON. The harness
 never reads the private reference manifest or train export. Export count and
-content must match `config['exports'][split]` (`count`, `sha256`). The present
-corpus has 20 validation and 19 eligible sealed test examples; one reviewed test
-example was withheld for privacy. The 60 real plus 60 controlled synthetic training
-examples do not contribute to held-out accuracy.
+content must match `config['exports'][split]` (`count`, `sha256`). Privacy-excluded
+examples remain excluded; exact corpus counts and exclusions are private runtime
+metadata. Real and controlled synthetic training examples do not contribute to
+held-out accuracy.
 
 Private outputs under `study_root/benchmark/{validation,test}` are:
 

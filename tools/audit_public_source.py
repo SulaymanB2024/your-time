@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import subprocess
@@ -14,7 +15,15 @@ from repo_layout import REPO_ROOT, SOURCE_ROOT
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(SOURCE_ROOT))
 
-from publication_privacy import EMAIL, EXAMPLE_DOMAINS, HOME_PATH, load_policy, rules
+from publication_privacy import (
+    EMAIL,
+    EXAMPLE_DOMAINS,
+    HOME_PATH,
+    PUBLIC_CONTACTS,
+    load_policy,
+    normalized_text,
+    rules,
+)
 from publish_source import SECRETS
 
 
@@ -33,6 +42,45 @@ def audit(refs: list[str]) -> dict:
     findings = []
     blobs = 0
     metadata_findings = []
+    filename_findings = []
+
+    def classify(line: bytes) -> dict:
+        line = normalized_text(line)
+        return {'personal_home_path': bool(HOME_PATH.search(line)),
+                'known_private_identifier': any(pattern.search(line) for pattern, _ in identifiers),
+                'credential_pattern': bool(SECRETS.search(line)),
+                'non_example_contact': any(email.rsplit(b'@', 1)[1].lower() not in EXAMPLE_DOMAINS
+                                           and email.lower() not in PUBLIC_CONTACTS for email in EMAIL.findall(line))}
+
+    def safe_path(path: str | None) -> str:
+        # Contact/home-path matches are reported by hash rather than echoed.
+        encoded = (path or '<unnamed>').encode()
+        checks = classify(encoded)
+        if checks['personal_home_path'] or checks['non_example_contact'] or checks['credential_pattern']:
+            return 'path-sha256:' + hashlib.sha256(encoded).hexdigest()
+        for pattern, replacement in identifiers:
+            encoded = pattern.sub(lambda _: replacement, encoded)
+        if classify(encoded)['known_private_identifier']:
+            return 'path-sha256:' + hashlib.sha256(encoded).hexdigest()
+        return encoded.decode(errors='replace')
+
+    # A blob may occur under several filenames; inspect every reachable path.
+    seen_paths = set()
+    for commit in commits:
+        for entry in git('ls-tree', '-rz', '--full-tree', commit).split(b'\0'):
+            if not entry:
+                continue
+            metadata, raw_path = entry.split(b'\t', 1)
+            oid = metadata.split()[2].decode()
+            identity = (oid, raw_path)
+            if identity in seen_paths:
+                continue
+            seen_paths.add(identity)
+            if len(seen_paths) > 200000:
+                raise ValueError('Public tree history exceeds the bounded audit')
+            categories = [name for name, matched in classify(raw_path).items() if matched]
+            if categories:
+                filename_findings.append({'object': oid, 'path': safe_path(raw_path.decode()), 'categories': categories})
     process = subprocess.Popen(['git', '-C', str(REPO_ROOT), 'cat-file', '--batch'],
                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     try:
@@ -56,10 +104,7 @@ def audit(refs: list[str]) -> dict:
             categories = Counter()
             locations = {}
             for number, line in enumerate(body.splitlines(), 1):
-                checks = {'personal_home_path': bool(HOME_PATH.search(line)),
-                          'known_private_identifier': any(pattern.search(line) for pattern, _ in identifiers),
-                          'credential_pattern': bool(SECRETS.search(line)),
-                          'non_example_contact': any(email.rsplit(b'@', 1)[1].lower() not in EXAMPLE_DOMAINS and email.lower() != b'noreply@github.com' for email in EMAIL.findall(line))}
+                checks = classify(line)
                 for category, matched in checks.items():
                     if matched:
                         categories[category] += 1
@@ -70,20 +115,18 @@ def audit(refs: list[str]) -> dict:
                 if is_blob:
                     totals.update(categories)
                 # Paths may themselves identify the installation; normalize them.
-                safe_path = (path or '<unnamed>').encode()
-                for pattern, replacement in identifiers:
-                    safe_path = pattern.sub(lambda _: replacement, safe_path)
-                item = {'object': oid, 'path': safe_path.decode(errors='replace'),
+                item = {'object': oid, 'path': safe_path(path),
                         'categories': dict(categories), 'lines': locations}
                 (findings if is_blob else metadata_findings).append(item)
     finally:
         process.stdin.close()
         process.stdout.close()
         process.wait(timeout=10)
-    return {'version': 'public_source_privacy_audit_v1', 'refs': refs,
+    return {'version': 'public_source_privacy_audit_v2', 'refs': refs,
             'reachable_commits': len(set(commits)), 'unique_blobs': blobs,
             'matched_blobs': len(findings), 'category_blob_lines': dict(totals),
             'matched_commit_metadata': len(metadata_findings), 'commit_metadata_findings': metadata_findings,
+            'matched_filenames': len(filename_findings), 'filename_findings': filename_findings,
             'findings': findings,
             'limits': ['Git refs and blobs only; hosted caches and external clones are outside this scan',
                        'pattern results require review; absence of matches is not proof of absence']}

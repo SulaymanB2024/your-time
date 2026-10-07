@@ -86,7 +86,7 @@ optional agents or grant permissions to the shared Python interpreter.
 
 - `/Applications/YourTimeWindowReader.app` requires local signing and an explicit Accessibility
   grant. The Python sampler consumes only a fresh record from the same process.
-- Capture has the existing Screen Recording grant.
+- Capture requires an explicit Screen Recording grant for the dedicated collector.
 - `/Applications/PhoneActivityReader.app` is the dedicated signed Full Disk Access
   reader. Screen Time sharing supplies Apple's local sync records.
 - Phone packaging used PyInstaller 6.22.3 and `ActivityWatch/aw-import-screentime`
@@ -95,9 +95,9 @@ optional agents or grant permissions to the shared Python interpreter.
   prerequisites are not included in this repository's Python runtime lock.
 - Rebuilding a signed reader may invalidate its macOS permission. Verify the
   signature and refresh only that exact app's grant when needed.
-- Calendar/Reminders and the custom browser extension are staged, optional
-  integrations. They are not enabled. EventKit needs explicit grants and a
-  selected-list allowlist before importing anything.
+- Calendar/Reminders and the custom browser extension are optional
+  integrations. EventKit requires explicit grants and a selected-list allowlist
+  before importing anything.
 
 Collectors, OCR and model jobs run with a minimal environment under
 `network-off.sb`. Enable FileVault for disk protection and keep runtime directories
@@ -107,7 +107,7 @@ and files user-only. Avoid exposing unauthenticated activity services. See
 ## Overnight model analysis
 
 The active model is pinned **Qwen3.5-9B Q8**, with an F16 vision projector, in
-`vision_quality_model_manifest.json`. Local `llama-mtmd-cli` and
+`src/your_time/vision_quality_model_manifest.json`. Local `llama-mtmd-cli` and
 `llama-completion` 0.5.0 use Metal. There is no model HTTP server. Weights are
 read-only under the private data root, outside Git.
 
@@ -150,8 +150,8 @@ scheduled, not successfully completed.
 
 Only final captions, tags, provenance and aggregate receipts are retained;
 model reasoning is discarded. Labels require source support. Inference cannot
-create a confirmed accomplishment. The earlier small direct image comparison
-favored 9B; private evaluation artifacts stay local and do not establish an
+create a confirmed accomplishment. Private evaluations stay local. Model
+selection requires task-specific evidence; this source repository makes no
 accuracy guarantee across all tasks.
 
 The current 9B latest receipt is `vision-fallback-latest-receipt.json`.
@@ -191,12 +191,12 @@ these jobs and disables their triggers until resumed.
 
 ## Setup checks and controls
 
-From the source directory:
+From the organized public checkout, after configuring an installation:
 
 ```sh
-./.venv/bin/python setup_check.py --write
-./.venv/bin/python setup_check.py --hash-models --write
-./.venv/bin/python chronicle_audit.py --days 7 --write
+uv run python src/your_time/setup_check.py --write
+uv run python src/your_time/setup_check.py --hash-models --write
+uv run python src/your_time/chronicle_audit.py --days 7 --write
 ```
 
 The setup check is read-only apart from its optional private receipt. It checks
@@ -208,9 +208,9 @@ configuration/status metadata and aggregate counts, not activity bodies.
 The data audit checks accounting bounds and joins, not semantic caption accuracy.
 
 ```sh
-./capture_control.zsh status
-./capture_control.zsh pause
-./capture_control.zsh resume
+./src/your_time/capture_control.zsh status
+./src/your_time/capture_control.zsh pause
+./src/your_time/capture_control.zsh resume
 ```
 
 Pause persists across logins. The storage guard pauses capture below 10 GiB and
@@ -237,5 +237,6 @@ The quality gate checks Python, shell, plist, JSON and JavaScript syntax, Ruff,
 and the regression suite without opening the private ledger. `make audit`
 optionally checks installed dependency versions against public advisories.
 For source-only updates to the public GitHub repository, use
-[publish_source.py](publish_source.py) as described in [GITHUB.md](GITHUB.md).
+[the source publisher](tools/publish_source.py) as described in
+[the publication guide](docs/PUBLISHING.md).
 Do not push the local historical working branch directly.
