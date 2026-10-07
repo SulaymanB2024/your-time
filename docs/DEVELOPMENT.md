@@ -53,7 +53,9 @@ hashes; source syntax checks validate each script and the combined script.
 .venv/bin/pytest -q tests/test_dashboard_metrics.py tests/test_local_dashboard.py tests/test_dashboard_explore.py
 ```
 
-The benchmark generates synthetic intervals and measures only calculation time.
+The benchmark generates synthetic intervals with exact collector-shaped support
+runs and measures only calculation time. Disjoint support and real producer
+integration are checked separately by the focused regression tests.
 It does not open the ledger or load a model. Compare identical inputs on the same
 machine and account for system load; it is not a model-throughput measurement.
 For a paired comparison, `--baseline-ref REVIEWED_REVISION` selects calculation

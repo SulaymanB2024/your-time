@@ -64,12 +64,11 @@ def time_of_day(analysis: dict) -> dict:
     for row in analysis["mac"]["segments"]:
         if row["state"] not in {"active", "unattributed"}:
             continue
-        lower, upper = _interval(row)
-        duration = (upper - lower).total_seconds()
         target = mac if row["state"] == "active" else unattributed
-        for index, a, b in _overlapping_bins(lower, upper, start, end, step):
-            hour = (start + index * step).astimezone(ZONE).hour
-            target[hour] += row["sampled_seconds"] * (b - a).total_seconds() / duration
+        for lower, upper, weight in _observed_intervals(row):
+            for index, a, b in _overlapping_bins(lower, upper, start, end, step):
+                hour = (start + index * step).astimezone(ZONE).hour
+                target[hour] += weight * (b - a).total_seconds()
     for index, intervals in enumerate(phone_intervals):
         hour = (start + index * step).astimezone(ZONE).hour
         phone[hour] += union_seconds(intervals)
@@ -127,19 +126,18 @@ def activity_score(analysis: dict, topic_by_id: dict[str, str], now: datetime,
     phone_apps = [Counter() for _ in range(count)]
     visible_topics = [Counter() for _ in range(count)]
     for item in analysis["mac"]["segments"]:
-        lower, upper = _interval(item)
-        duration = (upper - lower).total_seconds()
         # Calculate an inferred label once, only when this interval reaches the day.
         label = None
-        for index, a, b in _overlapping_bins(lower, upper, start, end, step):
-            seconds = item["sampled_seconds"] * (b - a).total_seconds() / duration
-            mac_states[index][item["state"]] += seconds
-            if item["state"] == "active":
-                if label is None:
-                    app, title = item.get("app"), item.get("window")
-                    label = ((topic_by_id.get(window_id(app, title)) if title else None)
-                             or broad_context(app, title, item.get("site_host")))
-                mac_topics[index][label] += seconds
+        for lower, upper, weight in _observed_intervals(item):
+            for index, a, b in _overlapping_bins(lower, upper, start, end, step):
+                seconds = weight * (b - a).total_seconds()
+                mac_states[index][item["state"]] += seconds
+                if item["state"] == "active":
+                    if label is None:
+                        app, title = item.get("app"), item.get("window")
+                        label = ((topic_by_id.get(window_id(app, title)) if title else None)
+                                 or broad_context(app, title, item.get("site_host")))
+                    mac_topics[index][label] += seconds
     for item in analysis["iphone"]["sessions"]:
         lower, upper = _interval(item)
         for index, a, b in _overlapping_bins(lower, upper, start, end, step):
@@ -174,6 +172,28 @@ def activity_score(analysis: dict, topic_by_id: dict[str, str], now: datetime,
 
 def _interval(row: dict) -> tuple[datetime, datetime]:
     return datetime.fromisoformat(row["start_utc"]), datetime.fromisoformat(row["end_utc"])
+
+
+def _observed_intervals(row: dict) -> Iterator[tuple[datetime, datetime, float]]:
+    """Project exact, disjoint collector support; retain legacy weighted spans.
+
+    daily_analysis.mac_segments emits ordered, nonoverlapping support runs whose
+    durations sum to sampled_seconds. An explicit empty list supplies no time;
+    only older rows without this field use proportional span accounting.
+    """
+    lower, upper = _interval(row)
+    if lower >= upper:
+        return
+    if "support_runs" not in row:
+        seconds = row["sampled_seconds"]
+        if seconds > 0:
+            yield lower, upper, seconds / (upper - lower).total_seconds()
+        return
+    for support in row["support_runs"]:
+        a, b = _interval(support)
+        a, b = max(lower, a), min(upper, b)
+        if a < b:
+            yield a, b, 1.0
 
 
 def _overlapping_bins(lower: datetime, upper: datetime, start: datetime,

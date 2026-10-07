@@ -50,6 +50,9 @@ names remain available from `local_dashboard` for existing callers. Hour and
 five-minute projections parse each interval once and visit only intersected UTC
 slots. Repeated clock-change hours remain distinct before hourly aggregation;
 phone intervals retain union accounting and missing Mac intervals stay unknown.
+Mac projections use the collector's exact `support_runs`, preserving short gaps
+inside a merged segment. Older records without support runs retain their weighted
+span calculation; an explicit empty support list contributes no observed time.
 
 Editable CSS and JavaScript live in `web/`. `dashboard_assets.py` loads only the
 four registered source assets and caches them per process. The compatibility

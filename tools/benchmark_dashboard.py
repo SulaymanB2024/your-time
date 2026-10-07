@@ -29,6 +29,7 @@ def synthetic_analysis(day: date, segments: int) -> dict:
         lower = start + spacing * index
         upper = min(end, lower + timedelta(seconds=5))
         rows.append({"start_utc": lower.isoformat(), "end_utc": upper.isoformat(),
+                     "support_runs": [{"start_utc": lower.isoformat(), "end_utc": upper.isoformat()}],
                      "sampled_seconds": (upper - lower).total_seconds(),
                      "state": ("active", "unattributed", "idle")[index % 3],
                      "app": "Synthetic editor", "window": "Synthetic project"})
@@ -51,6 +52,7 @@ def measure(analysis: dict, iterations: int, score=activity_score, hourly=time_o
         hours = hourly(analysis)
         samples.append(time.perf_counter() - before)
     return {"dataset": "synthetic", "segments": len(analysis["mac"]["segments"]),
+            "segments_with_exact_support": sum("support_runs" in row for row in analysis["mac"]["segments"]),
             "phone_sessions": len(analysis["iphone"]["sessions"]),
             "iterations": iterations, "median_seconds": statistics.median(samples),
             "minimum_seconds": min(samples), "score_bins": len(result),
@@ -71,7 +73,7 @@ def baseline_functions(revision: str) -> dict:
     else:
         raise ValueError("Baseline source is unavailable in local Git history")
     # Do not import the old controller or execute its top-level runtime code.
-    names = {"app_name", "time_of_day", "activity_score", "_interval", "_overlapping_bins"}
+    names = {"app_name", "time_of_day", "activity_score", "_interval", "_overlapping_bins", "_observed_intervals"}
     nodes = [node for node in ast.parse(result.stdout).body
              if isinstance(node, ast.FunctionDef) and node.name in names]
     if not {"app_name", "time_of_day", "activity_score"}.issubset({node.name for node in nodes}):

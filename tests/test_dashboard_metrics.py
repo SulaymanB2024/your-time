@@ -3,6 +3,7 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 
 from chronicle_rollup import local_boundaries
+from daily_analysis import mac_segments
 from dashboard_assets import read_asset
 from dashboard_metrics import activity_score, time_of_day
 
@@ -81,6 +82,66 @@ def test_offset_timestamps_reach_the_same_utc_slots():
     for key in ("start_utc", "end_utc"):
         row[key] = datetime.fromisoformat(row[key]).astimezone(timezone(timedelta(hours=2))).isoformat()
     assert activity_score(analysis, {}, end) == expected
+
+
+@pytest.mark.parametrize("state,key", [("active", "mac_seconds"),
+                                      ("unattributed", "mac_unattributed_seconds")])
+def test_disjoint_support_preserves_exact_bin_placement(state, key):
+    start, end = local_boundaries(date(2026, 9, 29))
+    row = segment(start + timedelta(minutes=4, seconds=55),
+                  start + timedelta(minutes=5, seconds=15), 10, state)
+    row["support_runs"] = [
+        session(start + timedelta(minutes=4, seconds=55), start + timedelta(minutes=5)),
+        session(start + timedelta(minutes=5, seconds=10), start + timedelta(minutes=5, seconds=15))]
+    analysis = {"day_local": "2026-09-29", "mac": {"segments": [row]},
+                "iphone": {"sessions": []}}
+    score = activity_score(analysis, {}, end)
+    assert [item[key] for item in score[:2]] == [5, 5]
+    assert sum(item[key] for item in score) == 10
+
+
+def test_hourly_support_preserves_gaps_clipping_and_exclusive_ends():
+    start, end = local_boundaries(date(2026, 9, 29))
+    row = segment(start - timedelta(seconds=5), start + timedelta(hours=1, seconds=15), 20)
+    row["support_runs"] = [session(start - timedelta(seconds=5), start + timedelta(seconds=5)),
+                           session(start + timedelta(minutes=59, seconds=55), start + timedelta(hours=1)),
+                           session(start + timedelta(hours=1, seconds=10), start + timedelta(hours=1, seconds=15))]
+    analysis = {"day_local": "2026-09-29", "mac": {"segments": [row]},
+                "iphone": {"sessions": []}}
+    hourly = time_of_day(analysis)
+    assert hourly["mac"][:2] == [10, 5]
+    assert sum(hourly["mac"]) == 15
+    score = activity_score(analysis, {}, end)
+    assert score[1]["mac_state"] == "unknown"
+    assert score[11]["mac_seconds"] == 5
+    assert score[12]["mac_seconds"] == 5
+    assert sum(item["mac_seconds"] for item in score) == 15
+
+
+def test_explicit_empty_support_does_not_invent_observed_time():
+    start, end = local_boundaries(date(2026, 9, 29))
+    row = segment(start, start + timedelta(minutes=5), 10)
+    row["support_runs"] = []
+    analysis = {"day_local": "2026-09-29", "mac": {"segments": [row]},
+                "iphone": {"sessions": []}}
+    assert sum(time_of_day(analysis)["mac"]) == 0
+    assert activity_score(analysis, {}, end)[0]["mac_state"] == "unknown"
+
+
+def test_collector_merged_samples_keep_their_hour_boundary_support():
+    start, end = local_boundaries(date(2026, 9, 29))
+    rows = [{"source": "mac_window_sample", "timestamp_utc": at.isoformat(),
+             "duration_seconds": 5, "data": {"app": "Editor", "title": "Draft"}}
+            for at in (start + timedelta(minutes=59, seconds=55),
+                       start + timedelta(hours=1, seconds=1))]
+    segments, _ = mac_segments(rows, start, end)
+    assert len(segments) == 1
+    assert len(segments[0]["support_runs"]) == 2
+    analysis = {"day_local": "2026-09-29", "mac": {"segments": segments},
+                "iphone": {"sessions": []}}
+    assert time_of_day(analysis)["mac"][:2] == [5, 5]
+    score = activity_score(analysis, {}, end)
+    assert [score[index]["mac_seconds"] for index in (11, 12)] == [5, 5]
 
 
 @pytest.mark.parametrize("name", ["../private.json", "/tmp/secret", "unreviewed.js"])
