@@ -30,7 +30,9 @@ flowchart LR
 | Evidence continuity | `activity_context.py`, `activity_episode_store.py`, `chronicle_activity.py` | Evidence-linked hypotheses and exact observed support; model allocation remains gated |
 | Scheduling | `overnight_schedule.py`, `overnight_text.py`, shell wrappers, `launchagents/` | Overnight stages and resource gates |
 | Accounting | `daily_analysis.py`, `daily_focus.py`, `behavior_analysis.py`, `topic_allocation.py`, `data_quality.py` | Interval joins, attribution and explicit coverage |
-| Presentation | `local_dashboard.py`, `dashboard_ui.py`, `dashboard_explore.py`, `dashboard_timeline.py`, `chronicle_rollup.py` | Private static HTML and historical rollups |
+| Presentation calculations | `dashboard_metrics.py`, `dashboard_timeline.py` | Observed interval accounting and timeline projections |
+| Presentation assembly | `local_dashboard.py`, `dashboard_ui.py`, `dashboard_assets.py`, `web/` | Snapshot coordination, reviewed UI assets and private static HTML |
+| Historical views | `chronicle_rollup.py` | Compact day, month and year rollups |
 | Optional inputs | `browser_extension/`, `browser_bridge.py`, `calendar_import.py` | Explicitly enabled, bounded metadata sources |
 | Verification | `tests/`, `tools/check.py`, `setup_check.py`, `chronicle_audit.py` | Synthetic regression tests, installed state and aggregate accounting checks |
 | Publication | `publish_source.py` | Reviewed source snapshots with separate public ancestry |
@@ -39,6 +41,23 @@ Runtime entry points remain in the root because installed LaunchAgents and
 signed readers refer to them. Tests and engineering guides have separate
 directories. A package migration must include launcher and signing migration;
 moving installed entry points casually would break collection or permissions.
+
+### Dashboard source layout
+
+`local_dashboard.py` coordinates evidence reads and publishes the private snapshot.
+`dashboard_metrics.py` owns display labels and interval calculations; its legacy
+names remain available from `local_dashboard` for existing callers. Hour and
+five-minute projections parse each interval once and visit only intersected UTC
+slots. Repeated clock-change hours remain distinct before hourly aggregation;
+phone intervals retain union accounting and missing Mac intervals stay unknown.
+
+Editable CSS and JavaScript live in `web/`. `dashboard_assets.py` loads only the
+four registered source assets and caches them per process. The compatibility
+modules `dashboard_styles.py` and `dashboard_explore.py` expose the existing
+constants. The renderer embeds the assembled assets and computes its CSP hashes,
+so the generated dashboard remains one offline file with no asset server or new
+network access. Publication permits the four exact paths, not arbitrary `web/`
+files.
 
 ## Data and trust
 

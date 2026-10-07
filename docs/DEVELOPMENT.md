@@ -41,6 +41,22 @@ collector freshness, private permissions, signatures, SQLite integrity and
 network denial. `chronicle_audit.py` checks accounting bounds; it cannot grade
 whether a caption correctly describes an image.
 
+### Dashboard performance
+
+Edit behavior in `dashboard_metrics.py`, rendering in `dashboard_ui.py`, and
+browser code/styles in `web/`. Keep the source-only publication registry current
+when adding assets. Rendering assembles and embeds the reviewed files with CSP
+hashes; source syntax checks validate each script and the combined script.
+
+```sh
+.venv/bin/python tools/benchmark_dashboard.py --segments 4000 --iterations 3
+.venv/bin/pytest -q tests/test_dashboard_metrics.py tests/test_local_dashboard.py tests/test_dashboard_explore.py
+```
+
+The benchmark generates synthetic intervals and measures only calculation time.
+It does not open the ledger or load a model. Compare identical inputs on the same
+machine and account for system load; it is not a model-throughput measurement.
+
 `make audit` is an optional dependency-advisory query. It sends package names
 and versions to public advisory services, with no activity data. Its result is
 limited to published advisories and this environment, not separately packaged

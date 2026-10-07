@@ -1,6 +1,6 @@
 PYTHON ?= .venv/bin/python
 
-.PHONY: check test lint setup audit
+.PHONY: check test lint setup audit benchmark
 
 check:
 	$(PYTHON) tools/check.py
@@ -10,6 +10,9 @@ test:
 
 lint:
 	$(PYTHON) -m ruff check .
+
+benchmark:
+	$(PYTHON) tools/benchmark_dashboard.py
 
 setup:
 	$(PYTHON) setup_check.py

@@ -19,9 +19,16 @@ def run(command: list[str]) -> None:
 
 
 def check_source() -> None:
-    from publish_source import CI_FILES, DOCS, JSON_FILES, ROOT_SOURCE_FILES, allowed
+    from publish_source import (
+        CI_FILES,
+        DOCS,
+        JSON_FILES,
+        ROOT_SOURCE_FILES,
+        WEB_FILES,
+        allowed,
+    )
 
-    candidates = {ROOT / name for name in CI_FILES | DOCS | JSON_FILES | ROOT_SOURCE_FILES}
+    candidates = {ROOT / name for name in CI_FILES | DOCS | JSON_FILES | ROOT_SOURCE_FILES | WEB_FILES}
     for directory in ("tests", "launchagents", "native", "browser_extension", "tools"):
         folder = ROOT / directory
         if not folder.is_dir() or folder.is_symlink():

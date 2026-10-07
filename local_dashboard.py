@@ -10,7 +10,6 @@ import shutil
 import subprocess
 from collections import Counter
 from datetime import datetime, timedelta, timezone
-from datetime import time as clock_time
 from pathlib import Path
 
 from behavior_analysis import aggregate as aggregate_behavior
@@ -20,13 +19,15 @@ from chronicle_rollup import (
     MONTHS,
     YEARS,
     calendar_summary,
-    local_boundaries,
     work_artifacts,
 )
 from chronicle_rollup import read_json as read_rollup
 from chronicle_rollup import refresh as refresh_chronicle
-from daily_analysis import ZONE, analyze, union_seconds
+from daily_analysis import ZONE, analyze
 from daily_focus import build as focus_build
+from dashboard_metrics import PHONE_NAMES as PHONE_NAMES
+from dashboard_metrics import activity_score, app_name, mac_windows, time_of_day
+from dashboard_metrics import mac_behavior as mac_behavior
 from dashboard_timeline import build_timeline
 from data_quality import check_analysis
 from local_synthesis import block_projection, fingerprint, summary_is_current
@@ -37,7 +38,6 @@ from task_corrections import active_outcomes
 from task_corrections import review as correction_review
 from task_corrections import summary as correction_summary
 from topic_allocation import allocate, broad_context
-from vision_batch import SENSITIVE_RE
 from window_topic_tagging import window_id
 
 DASHBOARD_DIR = STATE_DIR / "dashboard"
@@ -45,161 +45,6 @@ INDEX = DASHBOARD_DIR / "index.html"
 MANIFEST = DASHBOARD_DIR / "manifest.json"
 LOCK = STATE_DIR / "dashboard-refresh.lock"
 ANALYSIS_DIR = STATE_DIR / "analyses"
-PHONE_NAMES = {
-    "com.atebits.Tweetie2": "X",
-    "com.chess.iphone": "Chess",
-    "com.facebook.hatch": "Instagram",
-    "com.google.ios.youtubemusic": "YouTube Music",
-    "com.apple.MobileSMS": "Messages",
-    "com.google.Gmail": "Gmail",
-    "com.openai.chat": "ChatGPT",
-    "com.linkedin.LinkedIn": "LinkedIn",
-    "com.google.ios.youtube": "YouTube",
-    "com.google.chrome.ios": "Chrome",
-    "com.apple.control-center": "Control Center",
-    "com.apple.InCallService": "Phone calls",
-    "com.apple.camera": "Camera",
-    "net.whatsapp.WhatsApp": "WhatsApp",
-    "com.apple.SleepLockScreen": "Lock Screen",
-    "com.google.Maps": "Google Maps",
-    "com.apple.mobilenotes": "Notes",
-    "com.apple.springboard.app-library-open-pod": "App Library",
-    "com.apple.springboard.today-view": "Today View",
-    "com.apple.springboard.stand-by": "StandBy",
-    "com.industriousoffice.app": "Industrious",
-    "com.toyopagroup.picaboo": "Snapchat",
-}
-
-
-def app_name(value: str | None) -> str:
-    if not value:
-        return "Unknown app"
-    if value in PHONE_NAMES:
-        return PHONE_NAMES[value]
-    if value.startswith("com.") and "." in value:
-        return value.rsplit(".", 1)[-1].replace("_", " ").title()
-    return value
-
-
-def time_of_day(analysis: dict) -> dict:
-    day = datetime.fromisoformat(analysis["day_local"]).date()
-    mac = [0.0] * 24
-    unattributed = [0.0] * 24
-    phone = [0.0] * 24
-    lower = datetime.combine(day, clock_time.min, tzinfo=ZONE).astimezone(timezone.utc)
-    day_end = datetime.combine(day + timedelta(days=1), clock_time.min, tzinfo=ZONE).astimezone(timezone.utc)
-    while lower < day_end:
-        upper = min(day_end, lower + timedelta(hours=1))
-        hour = lower.astimezone(ZONE).hour
-        phone_intervals = []
-        for row in analysis["iphone"]["sessions"]:
-            a = max(lower, datetime.fromisoformat(row["start_utc"]))
-            b = min(upper, datetime.fromisoformat(row["end_utc"]))
-            if a < b:
-                phone_intervals.append((a, b))
-        phone[hour] += union_seconds(phone_intervals)
-        for row in analysis["mac"]["segments"]:
-            if row["state"] not in {"active", "unattributed"}:
-                continue
-            original_start = datetime.fromisoformat(row["start_utc"])
-            original_end = datetime.fromisoformat(row["end_utc"])
-            a, b = max(lower, original_start), min(upper, original_end)
-            if a < b:
-                target = mac if row["state"] == "active" else unattributed
-                target[hour] += row["sampled_seconds"] * (b - a).total_seconds() / (original_end - original_start).total_seconds()
-        lower = upper
-    return {"mac": [round(value, 1) for value in mac],
-            "unattributed": [round(value, 1) for value in unattributed],
-            "iphone": [round(value, 1) for value in phone]}
-
-
-def mac_behavior(analysis: dict) -> dict:
-    longest = 0.0
-    window_changes = 0
-    current_start = current_end = None
-    current_app = previous_window = None
-    for row in analysis["mac"]["segments"]:
-        if row["state"] != "active":
-            current_start = current_end = None
-            current_app = previous_window = None
-            continue
-        at, end = datetime.fromisoformat(row["start_utc"]), datetime.fromisoformat(row["end_utc"])
-        linked = (current_end is not None and row["app"] == current_app
-                  and 0 <= (at - current_end).total_seconds() <= 20)
-        if not linked:
-            current_start = at
-        elif previous_window != row["window"]:
-            window_changes += 1
-        current_end, current_app, previous_window = end, row["app"], row["window"]
-        longest = max(longest, (end - current_start).total_seconds())
-    return {"longest_same_app_stretch_seconds": round(longest, 1),
-            "window_changes": window_changes}
-
-
-def mac_windows(analysis: dict) -> list[dict]:
-    totals = Counter()
-    for item in analysis["mac"]["segments"]:
-        if item["state"] != "active" or not item.get("window"):
-            continue
-        title = item["window"]
-        if SENSITIVE_RE.search(title):
-            title = "[Sensitive window]"
-        totals[(item.get("app"), title)] += item["sampled_seconds"]
-    return [{"id": window_id(app, title), "title": title,
-             "seconds": round(seconds, 3)}
-            for (app, title), seconds in totals.most_common(20)]
-
-
-def activity_score(analysis: dict, topic_by_id: dict[str, str], now: datetime,
-                   screen_tags: list[dict] | None = None) -> list[dict]:
-    day = datetime.fromisoformat(analysis["day_local"]).date()
-    start, end = local_boundaries(day)
-    bins = []
-    cursor = start
-    while cursor < end:
-        upper = min(end, cursor + timedelta(minutes=5))
-        mac_topics = Counter()
-        mac_states = Counter()
-        for item in analysis["mac"]["segments"]:
-            a = max(cursor, datetime.fromisoformat(item["start_utc"]))
-            b = min(upper, datetime.fromisoformat(item["end_utc"]))
-            if a >= b:
-                continue
-            original = (datetime.fromisoformat(item["end_utc"]) -
-                        datetime.fromisoformat(item["start_utc"])).total_seconds()
-            seconds = item["sampled_seconds"] * (b - a).total_seconds() / original
-            mac_states[item["state"]] += seconds
-            if item["state"] == "active":
-                app, title = item.get("app"), item.get("window")
-                label = (topic_by_id.get(window_id(app, title)) if title else None)
-                mac_topics[label or broad_context(app, title, item.get("site_host"))] += seconds
-        phone_intervals = []
-        phone_apps = Counter()
-        for item in analysis["iphone"]["sessions"]:
-            a = max(cursor, datetime.fromisoformat(item["start_utc"]))
-            b = min(upper, datetime.fromisoformat(item["end_utc"]))
-            if a < b:
-                phone_intervals.append((a, b))
-                phone_apps[item["app"]] += (b - a).total_seconds()
-        phone_seconds = union_seconds(phone_intervals)
-        visible_topics = Counter(item["topic"] for item in (screen_tags or [])
-                                 if item.get("status") in {"model_inference", "featureprint_match"}
-                                 and item.get("timestamp_utc")
-                                 and cursor <= datetime.fromisoformat(item["timestamp_utc"]) < upper)
-        state = ("future" if cursor >= now else "active" if mac_states["active"] > 0
-                 else "unattributed" if mac_states["unattributed"] > 0
-                 else "locked" if mac_states["locked"] > 0
-                 else "idle" if mac_states["idle"] > 0 else "unknown")
-        bins.append({"start_utc": cursor.isoformat(), "end_utc": upper.isoformat(),
-                     "mac_state": state, "mac_seconds": round(mac_states["active"], 1),
-                     "mac_unattributed_seconds": round(mac_states["unattributed"], 1),
-                     "mac_topic": mac_topics.most_common(1)[0][0] if mac_topics else None,
-                     "mac_screen_topic": (visible_topics.most_common(1)[0][0]
-                                          if visible_topics and mac_states["unattributed"] > 0 else None),
-                     "iphone_seconds": round(phone_seconds, 1),
-                     "iphone_app": app_name(phone_apps.most_common(1)[0][0]) if phone_apps else None})
-        cursor = upper
-    return bins
 
 
 def read_json(path: Path) -> dict:

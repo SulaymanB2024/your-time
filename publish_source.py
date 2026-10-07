@@ -15,6 +15,7 @@ REPOSITORY = 'SulaymanB2024/your-time'
 REMOTE = f'https://github.com/{REPOSITORY}.git'
 SOURCE_REF = 'refs/heads/codex/github-source'
 CI_FILES = {'.github/workflows/checks.yml'}
+WEB_FILES = {'web/dashboard.css', 'web/dashboard.js', 'web/contexts.js', 'web/inspector.js'}
 DOCS = {'.gitignore', 'README.md', 'SECURITY.md', 'GITHUB.md', 'uv.lock', 'Makefile',
         'docs/ARCHITECTURE.md', 'docs/DEVELOPMENT.md', 'docs/CI.md', 'docs/ML_SPECIALIZATION.md',
         'requirements-ml.txt', 'docs/ML_WORKER.md', 'docs/ML_TRAINING.md', 'docs/ML_EVALUATION.md', 'docs/ML_CHRONICLE.md', 'docs/ML_TRIAL.md', 'docs/ML_TUNING.md'}
@@ -34,7 +35,9 @@ ROOT_SOURCE_FILES = {
     'daily_export.py',
     'daily_focus.py',
     'dashboard_explore.py',
+    'dashboard_assets.py',
     'dashboard_fixture.py',
+    'dashboard_metrics.py',
     'dashboard_styles.py',
     'dashboard_timeline.py',
     'dashboard_ui.py',
@@ -130,14 +133,14 @@ def allowed(path: str) -> bool:
     item = PurePosixPath(path)
     if item.is_absolute() or '..' in item.parts:
         return False
-    if path in DOCS or path in JSON_FILES or path in CI_FILES:
+    if path in DOCS or path in JSON_FILES or path in CI_FILES or path in WEB_FILES:
         return True
     if len(item.parts) == 1:
         return path in ROOT_SOURCE_FILES
     return (len(item.parts) == 2 and
             ((item.parts[0] == 'tests' and item.name.startswith('test_') and item.suffix == '.py') or
              (path == 'tests/conftest.py') or
-             (path in {'tools/check.py', 'tools/check_ml_runtime.py'}) or
+             (path in {'tools/check.py', 'tools/check_ml_runtime.py', 'tools/benchmark_dashboard.py'}) or
              (item.parts[0] == 'launchagents' and item.suffix == '.plist') or
              (item.parts[0] == 'native' and item.suffix in {'.m', '.plist'}) or
              (item.parts[0] == 'browser_extension' and item.suffix in {'.js', '.css', '.html'})))

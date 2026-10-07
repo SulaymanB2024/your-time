@@ -20,6 +20,7 @@ from publish_source import (
     'vision-latest-receipt.json', 'PERFORMANCE_REVIEW_2026-10-04.md',
     'VISION_QUALITY_TEST.md', 'CHRONICLE_PLAN.md', 'unknown.json', 'unreviewed.py', '.secrets.toml',
     'docs/private-review.md', 'tests/receipt.json', '.github/workflows/unreviewed.yml', '../secret.py', '/root.py',
+    'web/private.json', 'web/capture.png', 'web/unreviewed.js', 'web/dashboard.js/secret',
 ])
 def test_runtime_data_and_private_notes_are_excluded(path):
     assert not allowed(path)
@@ -127,6 +128,16 @@ def test_publisher_accepts_only_the_authorized_public_repository(monkeypatch):
                                  'docs/ARCHITECTURE.md', 'tools/check.py', '.github/workflows/checks.yml'])
 def test_registered_source_and_test_locations_are_publishable(path):
     assert allowed(path)
+
+
+def test_only_registered_dashboard_assets_are_publishable():
+    from dashboard_assets import ASSET_NAMES
+    from publish_source import WEB_FILES
+
+    assert WEB_FILES == {f'web/{name}' for name in ASSET_NAMES}
+    assert all(allowed(path) for path in WEB_FILES)
+    assert allowed('dashboard_assets.py') and allowed('dashboard_metrics.py')
+    assert allowed('tools/benchmark_dashboard.py')
 
 
 @pytest.mark.parametrize('prefix,size', [('AK' + 'IA', 16), ('AI' + 'za', 35),

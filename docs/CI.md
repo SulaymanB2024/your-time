@@ -33,9 +33,14 @@ jobs:
       - run: python -m pip install uv==0.11.19
       - run: uv sync --locked
       - run: make check
+      - name: Synthetic dashboard benchmark
+        run: .venv/bin/python tools/benchmark_dashboard.py --segments 4000 --iterations 3
 ```
 
 The workflow has a read-only token, no stored secrets, no privileged
 `pull_request_target` trigger, no deploy/publish step, and no artifact upload.
 Only public source and synthetic fixtures would reach the runner. Dependency
 advisory scanning and macOS permission readback remain separate checks.
+The dashboard benchmark uses fabricated intervals and prints timing aggregates;
+it never opens the private ledger or loads a model. Hosted runner timings do not
+establish performance on the user's Mac.
