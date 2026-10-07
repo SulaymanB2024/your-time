@@ -57,7 +57,7 @@ rich==15.0.0
 safetensors==0.8.0
 scipy==1.17.1
 sentencepiece==0.2.2
-setuptools==81.0.0
+setuptools==83.0.0
 shellingham==1.5.4
 six==1.17.0
 sounddevice==0.5.6
