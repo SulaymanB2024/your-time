@@ -1,3 +1,5 @@
+import pytest
+
 from private_io import write_json
 from telemetry_summary import summarize
 
@@ -96,3 +98,84 @@ def test_not_applicable_does_not_hide_generation_or_startup_process_errors(tmp_p
     assert sum(row["decode_failed"] for row in groups) == 2
     assert sum(row["process_failed"] for row in groups) == 1
     assert sum(row["failed_or_pending"] for row in groups) == 3
+
+
+@pytest.mark.parametrize("count", [
+    pytest.param(0, id="zero"),
+    pytest.param(-1, id="negative"),
+    pytest.param(0.5, id="fractional"),
+    pytest.param(8.0, id="float"),
+    pytest.param(True, id="true"),
+    pytest.param(False, id="false"),
+    pytest.param(None, id="missing"),
+    pytest.param("8", id="string"),
+    pytest.param([], id="list"),
+    pytest.param({}, id="object"),
+    pytest.param(float("nan"), id="nan"),
+    pytest.param(float("inf"), id="infinite"),
+    pytest.param(10**400, id="oversized_integer"),
+])
+def test_invalid_cpu_counts_keep_attempts_and_other_measurements(tmp_path, count):
+    attempt(tmp_path, "invalid_count", logical_cpu_count=count, samples=[{
+        "cpu_percent_one_core": 400, "gpu": {"device_percent": 80}}])
+    row = next(iter(summarize(tmp_path)["groups"].values()))
+    assert row["sampled_process_cpu_percent_all_logical_cores"] is None
+    assert row["attempts"] == row["complete_process_and_decode"] == 1
+    assert row["elapsed_attempt_seconds"] == 10
+    assert row["sampled_whole_device_gpu_percent"] == 80
+
+    attempt(tmp_path, "valid_zero", logical_cpu_count=8, samples=[{
+        "cpu_percent_one_core": 0, "gpu": {"device_percent": 0}}])
+    row = next(iter(summarize(tmp_path)["groups"].values()))
+    assert row["sampled_process_cpu_percent_all_logical_cores"] == 0
+    assert row["attempts"] == row["complete_process_and_decode"] == 2
+    assert row["elapsed_attempt_seconds"] == 20
+    assert row["sampled_whole_device_gpu_percent"] == 40
+
+
+def test_malformed_dispositions_remain_unknown_without_losing_attempts(tmp_path):
+    malformed = [None, False, 1, [], {}]
+    for index, value in enumerate(malformed):
+        attempt(tmp_path, f"decode_{index}", result_status=value)
+        attempt(tmp_path, f"process_{index}", status=value)
+    attempt(tmp_path, "success")
+    attempt(tmp_path, "decode_failure", result_status="schema_error")
+    attempt(tmp_path, "process_failure", status="process_error", result_status="schema_error")
+    attempt(tmp_path, "pending", status="running", elapsed_seconds=None)
+
+    row = next(iter(summarize(tmp_path)["groups"].values()))
+    assert row["attempts"] == 14
+    assert row["complete_process"] == 7
+    assert row["complete_process_and_decode"] == row["decode_failed"] == 1
+    assert row["decoding_disposition_unknown"] == row["process_disposition_unknown"] == 5
+    assert row["process_failed"] == row["process_pending"] == 1
+    assert row["failed_or_pending"] == 3
+    assert row["elapsed_attempt_seconds"] is None
+    assert row["measured_attempt_seconds"] == 130
+    assert row["attempts_with_unknown_elapsed"] == 1
+    assert row["complete_process"] == sum(row[key] for key in (
+        "complete_process_and_decode", "decoding_disposition_unknown",
+        "decoding_not_applicable", "decode_failed"))
+    assert row["attempts"] == sum(row[key] for key in (
+        "complete_process", "process_failed", "process_pending", "process_disposition_unknown"))
+
+
+def test_oversized_measurements_are_unavailable_without_dropping_attempts(tmp_path):
+    import json
+
+    oversized = 10**400
+    attempt(tmp_path, "oversized", process_seconds=oversized, elapsed_seconds=oversized,
+            logical_cpu_count=8, samples=[{
+                "cpu_percent_one_core": oversized, "gpu": {"device_percent": oversized}}])
+    attempt(tmp_path, "measured", logical_cpu_count=8, samples=[{
+        "cpu_percent_one_core": 400, "gpu": {"device_percent": 80}}])
+    result = summarize(tmp_path)
+    row = next(iter(result["groups"].values()))
+    assert row["attempts"] == row["complete_process_and_decode"] == 2
+    assert row["mean_request_seconds"] == row["median_request_seconds"] == 10
+    assert row["elapsed_attempt_seconds"] is None
+    assert row["measured_attempt_seconds"] == 10
+    assert row["attempts_with_unknown_elapsed"] == 1
+    assert row["sampled_process_cpu_percent_all_logical_cores"] == 50
+    assert row["sampled_whole_device_gpu_percent"] == 80
+    json.dumps(result, allow_nan=False)

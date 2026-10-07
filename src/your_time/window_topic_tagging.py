@@ -157,6 +157,8 @@ def validate_batch(value: dict, rows: list[dict]) -> list[dict]:
             filtered = True
             topic = "Unclear"
             evidence_word = ""
+        if topic.casefold() == "unclear":
+            topic = "Unclear"
         if not supported_topic(topic, evidence_word, allowed[identity]):
             filtered |= topic.casefold() != "unclear"
             topic = "Unclear"

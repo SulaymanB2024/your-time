@@ -59,6 +59,65 @@ def test_short_supported_subjects_are_not_forced_to_unclear():
     assert not window_topic_tagging.supported_topic("SQL", "SEO", row)
 
 
+@pytest.mark.parametrize("topic", ["Unclear", "unclear", "UNCLEAR", "uNcLeAr",
+                                  "  unclear  ", "\tUNCLEAR\n"])
+def test_case_insensitive_abstentions_never_count_as_specific_work(topic):
+    from datetime import date
+
+    row = {"id": "one", "title": "Chess tutorial", "strong_captions": [], "seconds": 120}
+    result = window_topic_tagging.validate_batch({"tags": [
+        {"id": "one", "topic": topic, "evidence_word": ""}]}, [row])
+    assert result == [{"id": "one", "topic": "Unclear", "status": "unclassified"}]
+    assert result.telemetry_status == "complete"
+    report = window_topic_tagging.make_report(date(2026, 10, 3), [row], [row],
+        [{**result[0], "seconds": row["seconds"]}], "synthetic-model", 120, "complete")
+    assert report["specific_seconds"] == 0
+
+
+@pytest.mark.parametrize("topic", ["Unclear", "unclear", "UNCLEAR", "uNcLeAr",
+                                  "  unclear  ", "\tUNCLEAR\n"])
+def test_valid_abstentions_reuse_unchanged_context_without_inference_or_telemetry(monkeypatch, topic):
+    import json
+    from datetime import date
+
+    from local_synthesis import TextModelOutput
+
+    row = {"id": "one", "title": "Chess tutorial", "strong_captions": [], "seconds": 120}
+    saved = {}
+    calls = []
+    dispositions = []
+    monkeypatch.setattr(window_topic_tagging, "source_rows", lambda _: ([row], row["seconds"]))
+    monkeypatch.setattr(window_topic_tagging, "read_json_file", lambda _: saved)
+    monkeypatch.setattr(window_topic_tagging, "private_write",
+                        lambda _path, payload: saved.update(json.loads(payload)))
+    monkeypatch.setattr(window_topic_tagging, "resource_gate", lambda **_: None)
+
+    def synthetic_call(*_args, **_kwargs):
+        calls.append("inference")
+        return TextModelOutput({"tags": [{"id": "one", "topic": topic,
+            "evidence_word": ""}]}, "a" * 32), 1
+
+    monkeypatch.setattr(window_topic_tagging, "model_call", synthetic_call)
+    monkeypatch.setattr(window_topic_tagging, "mark_output",
+                        lambda output, status: dispositions.append((output.telemetry_attempt_id, status)))
+    first = window_topic_tagging.run_day(date(2026, 10, 3), None, "synthetic-model")
+    assert first["status"] == "complete" and first["specific_titles"] == 0
+    assert calls == ["inference"] and dispositions == [("a" * 32, "complete")]
+    row["seconds"] = 240
+
+    def forbidden_call(*_args, **_kwargs):
+        raise AssertionError("unchanged context must reuse its valid abstention")
+
+    monkeypatch.setattr(window_topic_tagging, "model_call", forbidden_call)
+    second = window_topic_tagging.run_day(date(2026, 10, 3), None, "synthetic-model")
+    assert second["status"] == "complete" and second["specific_titles"] == 0
+    assert calls == ["inference"] and dispositions == [("a" * 32, "complete")]
+    assert saved["specific_seconds"] == 0
+    assert saved["tags"][0]["topic"] == "Unclear"
+    assert saved["tags"][0]["status"] == "unclassified"
+    assert saved["tags"][0]["seconds"] == 240
+
+
 @pytest.mark.parametrize("module_name", ["window_topic_tagging", "screen_context_tagging"])
 @pytest.mark.parametrize("case,expected", [("supported", "complete"),
                                           ("abstention", "complete"),

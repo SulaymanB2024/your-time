@@ -16,7 +16,12 @@ from secure_store import STATE_DIR
 
 
 def measured(value):
-    return value if type(value) in (int, float) and math.isfinite(value) and value >= 0 else None
+    if type(value) not in (int, float):
+        return None
+    try:
+        return value if math.isfinite(value) and value >= 0 else None
+    except OverflowError:
+        return None
 
 
 def startup_without_decoding(item):
@@ -69,7 +74,10 @@ def summarize(root: Path = STATE_DIR) -> dict:
         elapsed = [r["process_seconds"] for r in done if measured(r.get("process_seconds")) is not None]
         samples = [(r, s) for r in values if isinstance(r.get("samples"), list) for s in r["samples"] if isinstance(s, dict)]
         cpu = [s["cpu_percent_one_core"] / r["logical_cpu_count"] for r, s in samples
-               if measured(s.get("cpu_percent_one_core")) is not None and measured(r.get("logical_cpu_count"))]
+               if measured(s.get("cpu_percent_one_core")) is not None
+               and type(r.get("logical_cpu_count")) is int
+               and r["logical_cpu_count"] > 0
+               and measured(r["logical_cpu_count"]) is not None]
         gpu = [s["gpu"]["device_percent"] for _, s in samples if isinstance(s.get("gpu"), dict)
                and measured(s["gpu"].get("device_percent")) is not None]
         times = [measured(r.get("elapsed_seconds")) for r in values]
@@ -77,7 +85,7 @@ def summarize(root: Path = STATE_DIR) -> dict:
         total = known if all(v is not None for v in times) else None
         result[key] = {"attempts": len(values), "complete_process_and_decode": len(done),
                        "complete_process": len(process_done),
-                       "decoding_disposition_unknown": sum(r.get("result_status") is None for r in process_done),
+                       "decoding_disposition_unknown": sum(not isinstance(r.get("result_status"), str) for r in process_done),
                        "decoding_not_applicable": len(no_decode),
                        "process_pending": process_pending,
                        "process_failed": process_failed,
@@ -95,7 +103,7 @@ def summarize(root: Path = STATE_DIR) -> dict:
                        "capacity_scope": "requires_full_session_wall_time_from_benchmark_or_trial;attempts_exclude_startup_cleanup_and_preparation_gaps",
                        "gpu_scope": "whole_device_not_attributable_to_model"}
     return {"version": "telemetry_summary_v4", "groups": result,
-            "failure_scope": "process_failure_or_explicit_decode_failure;missing_decode_disposition_is_unknown;successful_declared_startup_has_no_decode",
+            "failure_scope": "process_failure_or_explicit_decode_failure;missing_or_nonstring_decode_disposition_is_unknown;successful_declared_startup_has_no_decode",
             "missing_measurements": "null; CPU/RSS exclude some Metal memory; GPU counters cover all apps"}
 
 
